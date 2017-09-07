@@ -38,7 +38,7 @@ N.B. Create a GitHub repository for the Language Development in ASD set of assig
 Set the working directory (the directory with your data and code for these assignments):
 
 ```{r}
-
+setwd("~/cogsci/EM3/Assignment I/assignment1")
 ```
 
 Load the three data sets, after downloading them from dropbox and saving them in your working directory:
@@ -47,7 +47,9 @@ Load the three data sets, after downloading them from dropbox and saving them in
 * Word data: https://www.dropbox.com/s/8ng1civpl2aux58/token_train.csv?dl=0
 
 ```{r}
-
+demo_da <- read.delim("demo_train(1).csv", sep = ",", header = T)
+lu_da <- read.delim ("LU_train.csv", sep =",", header = T)
+token_da <- read.delim ("token_train.csv", sep =",", header = T)
 ```
 
 Explore the 3 datasets (e.g. visualize them, summarize them, etc.). You will see that the data is messy, since the psychologists collected the demographic data, a linguist analyzed the length of utterance in May 2014 and the same linguist analyzed the words several months later. In particular:
@@ -64,6 +66,14 @@ Tip: Look into the package data.table, or google "how to rename variables in R"
 
 
 ```{r}
+library(stringr)
+library(tidyverse)
+demo_da <- demo_da %>% 
+  rename(SUBJ = Child.ID)
+
+demo_da <- demo_da %>% 
+  rename(VISIT = Visit)
+
 
 ```
 
@@ -72,6 +82,9 @@ Tip: There is a package called stringr, which will be very handy for you also in
 
 ```{r}
 
+demo_da$VISIT <-str_extract(demo_da$VISIT, regex("\\d") )
+lu_da$VISIT <-str_extract(lu_da$VISIT, regex("\\d") )
+token_da$VISIT <-str_extract(token_da$VISIT, regex("\\d") )
 
 ```
 
@@ -87,7 +100,9 @@ Tip: You will have to do identical work for both data sets, so to save time on t
 
 
 ```{r}
-
+lu_da$SUBJ <- gsub("\\.","",lu_da$SUBJ)
+token_da$SUBJ <- gsub("\\.","",token_da$SUBJ)
+demo_da$SUBJ <- gsub("\\.","",demo_da$SUBJ)
 ```
 
 2d. Now that the nitty gritty details of the different data sets are fixed, we want to make a subset of each data set only containig the variables that we wish to use in the final data set.
@@ -105,6 +120,16 @@ The variables we need are: Child.ID, Visit, Ethnicity, Diagnosis, Gender, Age, A
 It would be smart to rename the MullenRaw and ExpressiveLangRaw into something you can remember (i.e. nonVerbalIQ, verbalIQ)
 
 ```{r}
+demo_sub <- demo_da %>% 
+  select(SUBJ, VISIT, Ethnicity, Diagnosis, Gender, Age, ADOS,  MullenRaw, ExpressiveLangRaw) %>% 
+  rename(nonVerbalIQ = MullenRaw)
+demo_sub <- demo_sub %>% 
+  rename(VerbalIQ = ExpressiveLangRaw)
+
+lu_sub <- lu_da %>% 
+  select(SUBJ, VISIT, MOT_MLU, MOT_LUstd, CHI_MLU, CHI_LUstd)
+token_sub <- token_da %>% 
+  select(SUBJ, VISIT,types_MOT, types_CHI, tokens_MOT, tokens_CHI)
 
 
 ```
@@ -116,6 +141,8 @@ Tip: Merge only works for two data frames at the time.
 Tip: Check the number of observations in the datasets before and after merging. What is going on?
 
 ```{r}
+all <- merge(demo_sub, lu_sub, by = c("SUBJ","VISIT"), all.x = T)
+all <- merge(all, token_sub, by = c("SUBJ","VISIT"), all.x = T)
 
 ```
 
@@ -131,6 +158,18 @@ Tip: the final dataset should have as many rows as the the old one.
 
 ```{r}
 
+visit1 <- all %>% 
+  filter(VISIT == "1") %>% 
+  select(SUBJ, ADOS, nonVerbalIQ, VerbalIQ) %>% 
+  rename(ADOS2 = ADOS, nonverbalIQ2 = nonVerbalIQ, VerbalIQ2 = VerbalIQ)
+
+all2 <- merge(all,visit1, by = "SUBJ") 
+
+all2 <- all2 %>% 
+  select(-ADOS, -VerbalIQ, -nonVerbalIQ)
+  
+
+
 ```
 
 Now, we are almost ready to actually start working with the data. However, here are some additional finishing touches:
@@ -144,7 +183,13 @@ Tip: as.numeric() might be a useful function, but not alone.
 Tip: Google "how to rename levels in R".
 
 ```{r}
-
+all2 <- all2 %>% 
+  mutate(SUBJ = as.factor(SUBJ),
+         SUBJ = as.numeric(SUBJ),
+         Gender = as.factor(Gender),
+         Gender = recode(Gender,"1" = "male", "2" = "female"), # CHECK IF THIS IS CORRECT
+         Diagnosis = recode(Diagnosis, "A" = "ASD", "B" = "TD"))
+  
 
 ```
 
