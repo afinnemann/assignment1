@@ -197,7 +197,7 @@ all2 <- all2 %>%
 Save the data set using into a csv file. Hint: look into write.csv()
 
 ```{r}
-
+#write.csv(all2, "autism_data.csv")
 ```
 
 
@@ -213,6 +213,11 @@ List all kids who:
 3. have not completed all trials. Tip: Use pipes to solve this
 
 ```{r}
+all2 %>% 
+  filter(CHI_MLU > 2.7)
+
+all2 %>% 
+  filter(VISIT == "1" & CHI_MLU < 1.5)
 
 
 ```
@@ -224,7 +229,15 @@ USING ARRANGE
 2. Sort kids to find the kid who produced the least amount of words on the 1st visit.
 
 ```{r}
+all2 %>% 
+  filter(VISIT == 6) %>% 
+  arrange(desc(tokens_CHI)) %>% 
+  select(SUBJ, tokens_CHI)
 
+all2 %>% 
+  filter(VISIT == 1) %>% 
+  arrange(tokens_CHI) %>% 
+  select(SUBJ, tokens_CHI)
 
 ```
 
@@ -234,6 +247,9 @@ USING SELECT
 2. What happens if you include the name of a variable multiple times in a select() call?
 
 ```{r}
+chi_da <- all2 %>% 
+  filter(Diagnosis == "ASD") %>% 
+  select(SUBJ,CHI_MLU, tokens_CHI, VISIT)
 
 ```
 
@@ -244,6 +260,23 @@ USING MUTATE, SUMMARISE and PIPES
 3. The solution to task above enables us to assess the average amount of words produced by each child. Why don't we just use these average values to describe the language production of the children? What is the advantage of keeping all the data?
 
 ```{r}
+#I assume that this assigment should be solved for the children
+chi_da <- chi_da %>% 
+  group_by(VISIT) %>% 
+  mutate(avg_words_visit = sum(tokens_CHI, na.rm = T)/ length(tokens_CHI))
+
+#I don't see why it makes sense to use summarise, if want to add a new column.
+chi_da  <- chi_da %>% 
+  group_by(SUBJ) %>% 
+  mutate(words_per_chi = sum(tokens_CHI, na.rm = T) / length(tokens_CHI))
+
+#summarise would make sense for a new df
+results_df <- chi_da %>% 
+  group_by(SUBJ) %>% 
+  summarise(visit_mean_words = sum(tokens_CHI, na.rm = T) / length(VISIT))
+#is it possible to exclude 
+
+#answer 3: nr. of words doesn't measure the quality of childrens vocabulary, only that they are talkative if we assume that they have been doing the same activities (if the children have been during different activities, the result can be explained by that)
 
 
 ```
