@@ -248,31 +248,67 @@ DiagnosisTD  0.50199    0.11523 58.92000   4.356 5.36e-05 ***
 The dataset contains some additional variables characterizing the kids’ cognitive and clinical profile: ADOS (autism severity), MSEL EL (Expressive Language, that is, verbal IQ, or linguistic skills at first visit as assessed by a psychologist using Mullen Scales of Early Learning), MSEL VR (Visual Reception, used as a proxy for non verbal IQ at first visit), Age, Gender, Ethnicity. Would it make sense to add any of them to your model of linguistic trajectories? Create the best possible model (the one that best explain the data, with MLU as outcome). Next time your model will be tested on new participants, and we will proclaim a winner. Describe your strategy to select the best models (how did you choose the variables to include?) and send the code to Riccardo and Celine.
 
 ```{R}
-#Initial aim is to seek for as low AIC as possible.
+#Use PCA to find a principle component that predicts CHI_MLU
 
-da2 <- na.omit(da)
+library(psych)
+library(corrgram)
 
-base <- lmer(CHI_MLU~types_CHI*MOT_MLU+ (1+VISIT|SUBJ),da2)
-base1 <- lmer(CHI_MLU~types_CHI*MOT_MLU*VISIT +  (1+VISIT|SUBJ),da2)
-base2 <- lmer(CHI_MLU~types_CHI*MOT_MLU*VISIT + VerbalIQ2 + (1+VISIT|SUBJ),da2)
-base3 <- lmer(CHI_MLU~types_CHI*MOT_MLU*VISIT + VerbalIQ2 + ADOS2+ (1+VISIT|SUBJ),da2)
-base4 <- lmer(CHI_MLU~types_CHI*MOT_MLU*VISIT + VerbalIQ2 + Diagnosis +(1+VISIT|SUBJ),da2)
-anova(base, base1, base2, base3, base4)
 
-r.squaredGLMM(base)
-r.squaredGLMM(base1)
-r.squaredGLMM(base2)
+#checking for sufficient covariance
+#the corrgram shows darker areas indicating covariance among predictors
+corrgram(da2[,7:14], col.regions = colorRampPalette(c("dodgerblue4",'dodgerblue','white', 'gold',"firebrick4")),cor.method='pearson')
 
-#Base model's simplicity and impressive marginal R2 is resistable:
-Beautyful_model <- lmer(CHI_MLU~types_CHI*MOT_MLU+ (1+VISIT|SUBJ),da2)
 
+cortest.bartlett(da2[,7:14]) # yields significant result, Chisq(28) = 2626, p = 0. In other words the correlation matrix is significantly different from an identity-matrix
+
+
+#Principle component analysis:
+pca <- principal(da2[,7:14], nfactors = length(7:14), scores = TRUE, rotate = "oblimin")
+
+#Scree plot
+plot(pca$values, type = "b")
+#keeping 4 factors, although the first component seems to reflect most of covariance.
+pc1 <- principal(da2[,7:14], nfactors = 4, scores = TRUE, rotate = "oblimin")
+
+#we can check out factor loadings:
+print.psych(pc1, cut = 0.3, sort = TRUE) #very sensible components
+
+
+#creating a dataframe to model from
+pca_data <- cbind(da2, pc1$scores)
+
+pca_model1 <- lmer(CHI_MLU ~  TC1 +(1+SUBJ|VISIT), pca_data)
+pca_model2 <- lmer(CHI_MLU ~  TC1 + TC2 +(1+SUBJ|VISIT), pca_data)
+pca_model3 <- lmer(CHI_MLU ~  TC1 + TC2 + TC3 +(1+SUBJ|VISIT), pca_data)
+
+base_pca <- lmer(CHI_MLU ~ MOT_MLU*types_CHI*VISIT + VerbalIQ2 +(1+SUBJ|VISIT), pca_data)
+
+anova(base_pca, pca_model1, pca_model2, pca_model3)
+#PCA models outperforms the other model (which is also qualified)
+
+r.squaredGLMM(pca_model1)
+r.squaredGLMM(pca_model2)
+r.squaredGLMM(pca_model3)
+r.squaredGLMM(base_pca)
+
+#The three PCA models are nearly equal in R2 and AIC. However from the Anova we see that the pca_model2 explains the CHI_MLU significantly better.
+
+#my final model is
+
+the_beauty <- pca_model2 <- lmer(CHI_MLU ~  RC1 + RC2 +(1+SUBJ|VISIT), pca_data)
 
 
 ```
 
 ### [OPTIONAL] Exercise 5) Comment on how the three linguistic variables measure linguistic performance (the so-called "construct validity" of the measures). Do they express the same variance?
 
-[HERE GOES YOUR ANSWER]
+```{R}
+#we can read the predictor covariance from the factor loadings:
+print.psych(pc1, cut = 0.3, sort = TRUE) 
+
+
+
+```
 
 ### Structure of the code chunks
 
