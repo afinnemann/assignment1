@@ -120,18 +120,8 @@ The variables we need are: Child.ID, Visit, Ethnicity, Diagnosis, Gender, Age, A
 It would be smart to rename the MullenRaw and ExpressiveLangRaw into something you can remember (i.e. nonVerbalIQ, verbalIQ)
 
 ```{r}
-demo_sub <- demo_da %>% 
-  select(SUBJ, VISIT, Ethnicity, Diagnosis, Gender, Age, ADOS,  MullenRaw, ExpressiveLangRaw) %>% 
-  rename(nonVerbalIQ = MullenRaw)
-demo_sub <- demo_sub %>% 
-  rename(VerbalIQ = ExpressiveLangRaw)
 
-lu_sub <- lu_da %>% 
-  select(SUBJ, VISIT, MOT_MLU, MOT_LUstd, CHI_MLU, CHI_LUstd)
-token_sub <- token_da %>% 
-  select(SUBJ, VISIT,types_MOT, types_CHI, tokens_MOT, tokens_CHI)
-
-
+#see code below
 ```
 
 2e. Finally we are ready to merge all the data sets into just one. 
@@ -141,8 +131,14 @@ Tip: Merge only works for two data frames at the time.
 Tip: Check the number of observations in the datasets before and after merging. What is going on?
 
 ```{r}
-all <- merge(demo_sub, lu_sub, by = c("SUBJ","VISIT"), all.x = T)
-all <- merge(all, token_sub, by = c("SUBJ","VISIT"), all.x = T)
+
+all1 <- merge(demo_da, lu_da, by = c("SUBJ","VISIT"), all.x = T)
+all2 <- merge(all1, token_da, by = c("SUBJ","VISIT"), all.x = T) %>% 
+  select(SUBJ, VISIT, Ethnicity, Diagnosis, Gender, Age, ADOS,  MullenRaw, ExpressiveLangRaw, MOT_MLU, MOT_LUstd, CHI_MLU, CHI_LUstd, types_MOT, types_CHI, tokens_MOT, tokens_CHI) %>% 
+  rename(nonVerbalIQ = MullenRaw,
+        VerbalIQ = ExpressiveLangRaw)
+
+
 
 ```
 
@@ -158,14 +154,14 @@ Tip: the final dataset should have as many rows as the the old one.
 
 ```{r}
 
-visit1 <- all %>% 
+
+visit1 <- all2 %>% 
   filter(VISIT == "1") %>% 
   select(SUBJ, ADOS, nonVerbalIQ, VerbalIQ) %>% 
   rename(ADOS2 = ADOS, nonverbalIQ2 = nonVerbalIQ, VerbalIQ2 = VerbalIQ)
 
-all2 <- merge(all,visit1, by = "SUBJ") 
 
-all2 <- all2 %>% 
+all2 <- merge(all,visit1, by = "SUBJ") %>% 
   select(-ADOS, -VerbalIQ, -nonVerbalIQ)
   
 
@@ -191,6 +187,7 @@ all2 <- all2 %>%
          Diagnosis = recode(Diagnosis, "A" = "ASD", "B" = "TD"))
   
 
+
 ```
 
 
@@ -213,12 +210,16 @@ List all kids who:
 3. have not completed all trials. Tip: Use pipes to solve this
 
 ```{r}
-all2 %>% 
-  filter(CHI_MLU > 2.7)
+
+
+all2 %>%
+  filter(CHI_MLU > 2.7) %>% 
+  filter(!duplicated(SUBJ))
 
 all2 %>% 
   filter(VISIT == "1" & CHI_MLU < 1.5)
-
+NAs <- all2 %>% 
+  filter(is.na(tokens_CHI))
 
 ```
 
@@ -231,13 +232,13 @@ USING ARRANGE
 ```{r}
 all2 %>% 
   filter(VISIT == 6) %>% 
-  arrange(desc(tokens_CHI)) %>% 
-  select(SUBJ, tokens_CHI)
+  arrange(desc(types_CHI)) %>% 
+  select(SUBJ, types_CHI)
 
 all2 %>% 
   filter(VISIT == 1) %>% 
-  arrange(tokens_CHI) %>% 
-  select(SUBJ, tokens_CHI)
+  arrange(types_CHI) %>% 
+  select(SUBJ, types_CHI)
 
 ```
 
@@ -260,7 +261,7 @@ USING MUTATE, SUMMARISE and PIPES
 3. The solution to task above enables us to assess the average amount of words produced by each child. Why don't we just use these average values to describe the language production of the children? What is the advantage of keeping all the data?
 
 ```{r}
-#I assume that this assigment should be solved for the children
+
 chi_da <- chi_da %>% 
   group_by(VISIT) %>% 
   mutate(avg_words_visit = sum(tokens_CHI, na.rm = T)/ length(tokens_CHI))
@@ -273,7 +274,7 @@ chi_da  <- chi_da %>%
 #summarise would make sense for a new df
 results_df <- chi_da %>% 
   group_by(SUBJ) %>% 
-  summarise(visit_mean_words = sum(tokens_CHI, na.rm = T) / length(VISIT))
+  summarise(visit_mean_words = sum(tokens_CHI, na.rm = T) / length(tokens_CHI)
 #is it possible to exclude 
 
 #answer 3: nr. of words doesn't measure the quality of childrens vocabulary, only that they are talkative if we assume that they have been doing the same activities (if the children have been during different activities, the result can be explained by that)
