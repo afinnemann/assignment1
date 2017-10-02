@@ -1,0 +1,737 @@
+---
+title: "Assignment 1 - Language Development in ASD - part 3"
+author: "Adam Finnemann"
+date: "Oktober2, 2017"
+---
+
+```{r setup, include=FALSE}
+
+#recreating my model using PCA
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+
+library(pacman)
+p_load(tidyverse, stringr, lmerTest, MuMIn, psych, corrgram, ModelMetrics, caret)
+
+da <- read.csv("autism_data.csv", sep = ";")
+
+da2 <- na.omit(da)
+
+
+
+```
+
+## Welcome to the third exciting part of the Language Development in ASD exercise
+
+In this exercise we will delve more in depth with different practices of model comparison and model dplyr::selection, by first evaluating your models from last time, then learning how to cross-validate models and finally how to systematically compare models.
+
+N.B. There are several datasets for this exercise, so pay attention to which one you are using!
+
+1. The (training) dataset from last time (the awesome one you produced :-) ).
+2. The (test) datasets on which you can test the models from last time:
+* Demographic and clinical data: https://www.dropbox.com/s/ra99bdvm6fzay3g/demo_test.csv?dl=0
+* Utterance Length data: https://www.dropbox.com/s/uxtqqzl18nwxowq/LU_test.csv?dl=0
+* Word data: https://www.dropbox.com/s/1ces4hv8kh0stov/token_test.csv?dl=0
+
+### Exercise 1) Testing model performance
+
+How did your models from last time perform? In this exercise you have to compare the results on the training data () and on the test data. Report both of them. Compare them. Discuss why they are different.
+
+- recreate the models you chose last time (just write the code again and apply it to Assignment2TrainData1.csv)
+- calculate performance of the model on the training data: root mean square error is a good measure. (Tip: google the functions rmse() and predict() )
+
+```{r}
+
+
+pca <- principal(da2[,c(3,7:9,11:14)], nfactors = length(7:14), scores = TRUE, rotate = "oblimin")
+
+pc1 <- principal(da2[,c(3,7:9,11:14)], nfactors = 4, scores = TRUE, rotate = "oblimin")
+
+#creating a dataframe to model from
+pca_data <- cbind(da2, pc1$scores)
+
+the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), pca_data)
+
+r.squaredGLMM(the_beauty)
+
+pca_predict <- predict(the_beauty, pca_data)
+
+ModelMetrics::rmse(pca_data$CHI_MLU, pca_predict)
+
+
+
+
+```
+
+The model has a marginal effect size of : `r r.squaredGLMM(the_beauty)`
+
+
+- create the test dataset (apply the code from assignment 1 part 1 to clean up the 3 test datasets)
+- test the performance of the models on the test data (Tips: time to reuse "predict()")
+
+```{r}
+
+
+
+token_da <- read.csv("token_test.csv")
+
+demo_da <- read.csv("demo_test.csv") 
+
+lu_da <- read.csv("LU_test.csv")
+
+
+demo_da <- demo_da %>% 
+  rename(SUBJ = Child.ID)
+
+demo_da <- demo_da %>% 
+  rename(VISIT = Visit)#Cleaning 
+
+
+demo_da$VISIT <-str_extract(demo_da$VISIT, regex("\\d") )
+lu_da$VISIT <-str_extract(lu_da$VISIT, regex("\\d") )
+token_da$VISIT <-str_extract(token_da$VISIT, regex("\\d") )
+
+
+
+lu_da$SUBJ <- gsub("\\.","",lu_da$SUBJ)
+token_da$SUBJ <- gsub("\\.","",token_da$SUBJ)
+demo_da$SUBJ <- gsub("\\.","",demo_da$SUBJ)
+
+
+all1 <- merge(demo_da, lu_da, by = c("SUBJ","VISIT"), all.x = T)
+
+all2 <- merge(all1, token_da, by = c("SUBJ","VISIT"), all.x = T) %>% 
+  dplyr::select(SUBJ, VISIT, Ethnicity, Diagnosis, Gender, Age, ADOS,  MullenRaw, ExpressiveLangRaw, MOT_MLU, MOT_LUstd, CHI_MLU, CHI_LUstd, types_MOT, types_CHI, tokens_MOT, tokens_CHI) %>% 
+  rename(nonVerbalIQ = MullenRaw,
+        VerbalIQ = ExpressiveLangRaw)
+
+
+
+visit1 <- all2 %>% 
+  filter(VISIT == "1") %>% 
+  dplyr::select(SUBJ, ADOS, nonVerbalIQ, VerbalIQ) %>% 
+  rename(ADOS2 = ADOS, nonverbalIQ2 = nonVerbalIQ, VerbalIQ2 = VerbalIQ)
+
+merge_df <- merge(all2,visit1, by = "SUBJ") %>% 
+  dplyr::select(-ADOS, -VerbalIQ, -nonVerbalIQ)
+
+
+
+
+pred_data <- merge_df%>% 
+  mutate(SUBJ = as.factor(SUBJ),
+         SUBJ = as.numeric(SUBJ),
+         Gender = as.factor(Gender),
+         Gender = recode(Gender,"1" = "male", "2" = "female"), # CHECK IF THIS IS CORRECT
+         Diagnosis = recode(Diagnosis, "A" = "ASD", "B" = "TD"),
+         VISIT = as.numeric(VISIT),
+         Age = as.numeric(Age))
+
+
+#predicting factor scores for test participants using the principal component analysis trained on the the base data.
+
+
+predict <- predict.psych(pc1,pred_data[,c(2,6:8,10:13)])
+
+
+#combining factor scores with test data set.
+predict_da_pc <- cbind(pred_data, predict)  %>% 
+  as.data.frame()
+  
+#predicting MLU scores based on factor scores using model from previous assignemnt.
+test_error <- predict(the_beauty, predict_da_pc)
+
+#computing error between pca based predictions and actual MLU
+ModelMetrics::rmse(na.omit(predict_da_pc$CHI_MLU), na.omit(test_error))
+
+
+```
+The model trained on the the training data has a root-mean-sqaure error of `r ModelMetrics::rmse(na.omit(predict_da_pc$CHI_MLU), na.omit(test_error))` on the test data.
+
+
+
+
+### Exercise 2) Model dplyr::selection via Cross-validation (N.B: ChildMLU!)
+
+One way to reduce bad surprises when testing a model on new data is to train the model via cross-validation. 
+
+In this exercise you have to use cross-validation to calculate the predictive error of your models and use this predictive error to dplyr::select the best possible model.
+
+- Create the basic model of ChildMLU as a function of Time and Diagnosis (don't forget the random effects!).
+```{r}
+
+mdl <- lmer(CHI_MLU ~Diagnosis*VISIT + (VISIT|SUBJ), da2)
+
+```
+
+
+
+
+- Make a cross-validated version of the model. (Tips: google the function "createFolds";  loop through each fold, train a model on the other folds and test it on the fold)
+- Report the results and comment on them.
+
+```{r}
+
+
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~Diagnosis*VISIT + (VISIT|SUBJ), da2)
+  
+  
+  mdl <- lmer(CHI_MLU ~Diagnosis*VISIT + (VISIT|SUBJ), da2)
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+  
+  
+}
+mean(error, na.rm = T)
+
+
+
+```
+
+for 5 folds, the mean rmse is `r mean(error, na.rm = T)`
+
+- Now try to find the best possible predictive model of ChildMLU, that is, the one that produces the best cross-validated results.
+
+```{r}
+
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  types_CHI * MOT_MLU+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+
+```
+
+
+```{r}
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3+ TC4 + TC1+(1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+```
+```{r}
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+
+}
+
+mean(error, na.rm = T)
+```
+
+The data leaked based model using types and mot_mlu has a 5 fold mean rmse of . 
+
+
+```{r}
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+fixed_coefs = matrix(nrow = length(folds), ncol = 4)
+colnames(fixed_coefs) <- c("intercept","predictor1","predictor2", "predictor3")
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+  
+  fixed_coefs[i,] <- fixef(train_model) 
+  
+}
+fixed_coefs
+mean(error, na.rm = T)
+
+```
+The PCA based model has a 5 fold mean rmse of `r mean(error, na.rm = T)` which is superior to the others
+
+
+- Bonus Question 1: How would you go comparing the performance of the basic model and the cross-validated model on the testing set?
+
+PCA model showed to be the best overall. Here it is tested with paramter estimates from the whole set, and from the cross-validation. 
+The cross-validation produces paramter estimates for each fold. I choose to use the average estimates.
+```{r}
+
+#Model fitted on whole set
+the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), pca_data)
+
+
+test_error <- predict(the_beauty, predict_da_pc)
+
+ModelMetrics::rmse(na.omit(pred_data$CHI_MLU), na.omit(test_error))
+#4599157
+
+
+
+#calculating estimated coefficients for each fold:
+folds <- createFolds(pca_data, 5)
+
+#we need 4 columns, one for each of the three predictors and one for the intercept:
+fixed_coefs = matrix(nrow = length(folds), ncol = 4)
+colnames(fixed_coefs) <- c("intercept","predictor1","predictor2", "predictor3")
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  fixed_coefs[i,] <- fixef(train_model) 
+  
+}
+
+#finding mean of etimates
+mean_estimates <- fixed_coefs %>%  
+  as.data.frame() %>% 
+  summarise_all(funs(mean))
+mean_estimates
+
+```
+the mean estimates of 5 folds are `r mean_estimates`
+
+The coefficients of our model is manually changed to the these values.
+```{r}
+avg_coef_model  <- the_beauty
+
+avg_coef_model@beta <- as.numeric(mean_estimates)
+
+fixef(avg_coef_model) - fixef(the_beauty)
+```
+Wee see that the difference between the two are always negative. Since the_beauty is the model trained on the full data and not cross-validated we can conclude that it has slightly higher estimates compared to the cross-validated one. This conclusion doesn't hold for TC1 since it's negative, so here the estimate of the_beauty must be higher than for avg_coef_model
+
+
+
+
+prediction errors for avg_coef_model is found: 
+```{r}
+
+avg_coef_error <- predict(avg_coef_model, predict_da_pc, allow.new.levels = T)
+
+avg_coef_rmse<-  ModelMetrics::rmse(na.omit(pred_data$CHI_MLU), na.omit(avg_coef_error))
+
+
+original_model_error <- predict(the_beauty, predict_da_pc, allow.new.levels = T)
+ 
+original_model_rmse <- ModelMetrics::rmse(na.omit(pred_data$CHI_MLU), na.omit(original_model_error))
+
+avg_coef_rmse 
+original_model_rmse
+
+```
+We see that the difference between the two rmse is `r avg_coef_rmse - original_model_rmse`. From this we can conclude that the model with average cross_validation parameter estimates predicts the new data slightly worse.
+
+
+
+
+- Bonus Question 2: What is the effect of changing the number of folds? Can you plot RMSE as a function of number of folds?
+
+
+```{r}
+max_folds = 30
+error_matrix <- matrix(nrow = max_folds, ncol = max_folds)
+
+for (j in 2:max_folds){
+folds <- createFolds(unique(pca_data$SUBJ), k = j, returnTrain = F)
+
+#fixed_coefs = matrix(nrow = length(folds), ncol = 4)
+#colnames(fixed_coefs) <- c("intercept","predictor1","predictor2", "predictor3")
+
+for (i in 1:length(folds)) {
+
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error_matrix[i-1,j-1] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+  
+ # fixed_coefs[i,j] <- fixef(train_model) 
+  
+}
+}
+
+
+
+plot <- apply(error_matrix, 2, function(x) mean(x,na.rm = T))
+plot.df <- data.frame(error = plot, nr_of_folds = seq(1,max_folds))
+
+
+
+plot.df %>% 
+  ggplot(aes(nr_of_folds, error, color = error)) +
+  geom_point() +
+  geom_line()
+
+lm_test <- lm(error ~ nr_of_folds, data = filter(plot.df, row.names(plot.df) != 1))
+summary(lm_test)
+
+filter(plot.df, row.names(plot.df) != 1) %>% 
+  ggplot(aes(nr_of_folds, error, color = error)) +
+  geom_point() +
+  geom_line()
+  geom_smooth(method = "lm")
+
+
+```
+We see that there is a significant decrease in mean rmse as the number of folds grow (Intercept = 0.34, sd = 0.003, t(30) = 112.28, p < 2e-16) and (beta_estimate = -0.00077, sd = 0.00016, t(30) = 4.984, p < 2.43e-05)
+
+
+
+
+- Bonus Question 3: compare the cross-validated predictive error against the actual predictive error on the test data
+
+```{r}
+#error from cross-validation
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+}
+
+mean(error, na.rm = T)
+
+
+
+
+test_error <- predict(train_model, predict_da_pc, allow.new.levels = T)
+
+test_set_error<- ModelMetrics::rmse(na.omit(pred_data$CHI_MLU), na.omit(test_error))
+
+test_set_error
+
+```
+Error of the model on cross validation is `r mean(error, na.rm = T)`, and for the test-set it's `r test_set_error`. 
+This isn't too worrying since cross-validation is better suited for the parameter selection process. Once the paramters are dplyr::selected I would estimate them on the full dataset. 
+
+
+### Exercise 3) Assessing the single child
+
+Let's get to business. This new kiddo - Bernie - has entered your clinic. This child has to be assessed according to his group's average and his expected development.
+
+Bernie is one of the six kids in the test dataset, so make sure to extract that child alone for the following analysis.
+
+You want to evaluate:
+
+- how does the child fare in ChildMLU compared to the average TD child at each visit? Define the distance in terms of absolute difference between this Child and the average TD.
+(Tip: recreate the equation of the model: Y=Intercept+BetaX1+BetaX2, etc; input the average of the TD group  for each parameter in the model as X1, X2, etc.).
+
+```{r}
+bernie = all2 %>% 
+  filter(SUBJ == "Bernie")
+
+
+#calculating mean PCA scores for each visit.
+
+avg_td_mlu <- pca_data %>% 
+  filter(Diagnosis == "TD") %>% 
+  group_by(VISIT) %>% 
+  summarise(TC3 = mean(TC3),
+            TC4 = mean(TC4),
+            TC1 = mean(TC1),
+            CHI_MLU = mean(CHI_MLU)) %>% 
+  mutate(bernie_mlu = bernie$CHI_MLU)
+
+
+#dropping random effects from my model. 
+  train_model <-  lm(CHI_MLU ~  TC3 + TC4 + TC1, avg_td_mlu)
+  
+#create predictions from average pca scores. 
+  avg_predict_mlu <- predict(train_model, avg_td_mlu)
+  
+#creating a data frame of Bernie's data and the average predictions
+  avg_td_mlu <- avg_td_mlu %>% 
+    mutate(avg_td_mlu = avg_predict_mlu) %>% 
+    gather(data, key, avg_td_mlu, bernie_mlu)
+  
+#plotting them
+  ggplot(avg_td_mlu, (aes(VISIT, key, color = data))) +
+    geom_point() +
+    geom_line()
+
+    
+
+
+
+
+
+```
+
+We see that Bernie's mlu lies quite systematically above the line predicted by the avg TD child. However, Bernie's development have seen to stagnate over the last couple of visits.
+
+
+- how does the child fare compared to the model predictions at Visit 6? Is the child below or above expectations? (tip: use the predict() function on Bernie's data only and compare the prediction with the actual performance of the child)
+
+```{r}
+#Computing pca scores for 4 earlier used principal components
+
+bernie <- bernie %>% 
+  mutate(VISIT = as.numeric(VISIT),
+         Age = as.numeric(Age))
+pca_bernie <- predict.psych(pc1,bernie[,c(2,6,10:11,13:16)])
+
+#adding pca scores onto bernie's df.
+bernie <- cbind(pca_bernie,bernie)
+
+
+#traning model on the average TD pca scores.
+train_model <-  lm(CHI_MLU ~  TC3 + TC4 + TC1, avg_td_mlu)
+
+#using the model to predict scores based on Bernie's pca scores
+bernie_predict <- predict(train_model, bernie)
+
+
+#creating a data frame of Bernie's data and predictions
+bernie <- bernie %>% 
+  mutate(predicted = bernie_predict) %>% 
+  gather(data, key, predicted, CHI_MLU)
+#plotting them
+  ggplot(bernie, (aes(VISIT, key, color = data))) +
+    geom_point() +
+    geom_line()
+
+  
+
+
+```
+I've interpret the question as follows: train the model on the average values for TD children, use this model to predict mlu values for Bernie. 
+According to the graph bernie is close to, but a bit above, the expected mlu at visit six. 
+The elephant in room is of course the negative prediction at the second visit, which calls for an explanation I don't have.
+
+
+
+### OPTIONAL: Exercise 4) Model dplyr::selection via Information Criteria
+Another way to reduce the bad surprises when testing a model on new data is to pay close attention to the relative information criteria between the models you are comparing. Let's learn how to do that!
+
+Re-create a dplyr::selection of possible models explaining ChildMLU (the ones you tested for exercise 2, but now trained on the full dataset and not cross-validated).
+
+Then try to find the best possible predictive model of ChildMLU, that is, the one that produces the lowest information criterion.
+
+- Bonus question for the optional exercise: are information criteria correlated with cross-validated RMSE? That is, if you take AIC for Model 1, Model 2 and Model 3, do they co-vary with their cross-validated RMSE?
+
+
+mean rmse for cross validation and AIC are compared for five models.df
+```{r}
+cheesey_model <-  lmer(CHI_MLU ~  types_CHI * MOT_MLU+ (1+VISIT|SUBJ), pca_data)
+
+interaction_model <-  lmer(CHI_MLU ~  ADOS2 *VISIT*MOT_MLU+ (1+VISIT|SUBJ), pca_data)
+
+pca_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), pca_data)
+
+pca_random <-  lmer(CHI_MLU ~  TC3 + TC2+ (1+VISIT|SUBJ), pca_data)
+
+weird_model <-  lmer(CHI_MLU ~  ADOS2 *VISIT*MOT_MLU*TC3+ (1+VISIT|SUBJ), pca_data)
+
+
+
+#best PCA based model
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+  
+  
+}
+pca_error <- mean(error, na.rm = T)
+
+
+####### cheesey model based on types and MOT_MLU
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  types_CHI * MOT_MLU+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+}
+
+cheesey_error <- mean(error, na.rm = T)
+
+####### three way interaction model:
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  ADOS2 *VISIT*MOT_MLU+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+}
+
+interaction_error <- mean(error, na.rm = T)
+
+##### random pca model
+
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  TC3 + TC2+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+
+}
+
+
+pca_random_error <- mean(error, na.rm = T)
+
+###weird model:
+folds <- createFolds(pca_data, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+for (i in 1:length(folds)) {
+  train_folds = filter(pca_data, !(SUBJ %in% folds[[i]]))
+  predict_fold = filter(pca_data, SUBJ %in% folds[[i]])
+  
+  train_model <-  lmer(CHI_MLU ~  ADOS2 *VISIT*MOT_MLU*TC3+ (1+VISIT|SUBJ), train_folds)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+
+
+}
+
+weird_model_error <- mean(error, na.rm = T)
+
+
+
+
+
+
+
+aic <- anova(weird_model, pca_random, cheesey_model, interaction_model, pca_model)$AIC
+
+rmse <- c(weird_model_error, pca_random_error, cheesey_error, interaction_error, pca_error)
+
+df <- data.frame(aic = aic, rmse = rmse)
+
+
+df %>% 
+  ggplot(aes(aic,rmse, color = rmse)) +
+  geom_point() +
+  geom_smooth(method = "lm") 
+summary(lm(rmse~aic, data = df))
+
+
+
+
+
+
+```
+`r df`
+
+The 4-way interaction with pca predictor and non pca-predictors has lowest rmse, `r df[1,2]`. But it has an AIC of `r df[1,1]` which is only 3. lowest. This seems strange
+
+The Second lowest rmse, `r df[2,2]`, which is my random PCA model, has an AIC of `r df[2,1]` which is close to the double of the other models with low rmse. 
+
+A stastical test is made to check of a relation between AIC and rmse. 
+
+  
+
+
+```{r}
+summary(lm(rmse~ aic, data = df))
+``` 
+There isn't a singificant relation between AIC and rmse.
+
+
+### OPTIONAL: Exercise 5): Using Lasso for model dplyr::selection
+Welcome to the last secret exercise. If you have already solved the previous exercises, and still there's not enough for you, you can expand your expertise by learning about penalizations. Check out this tutorial: http://machinelearningmastery.com/penalized-regression-in-r/ and make sure to google what penalization is, with a focus on L1 and L2-norms. Then try them on your data!
+
+
+
