@@ -57,6 +57,8 @@ pca_predict <- predict(the_beauty, pca_data)
 
 ModelMetrics::rmse(pca_data$CHI_MLU, pca_predict)
 
+#write.csv(pca_data, "pca_autist_data.csv")
+
 
 
 
@@ -483,7 +485,6 @@ You want to evaluate:
 bernie = all2 %>% 
   filter(SUBJ == "Bernie")
 
-
 #calculating mean PCA scores for each visit.
 
 avg_td_mlu <- pca_data %>% 
@@ -496,23 +497,29 @@ avg_td_mlu <- pca_data %>%
   mutate(bernie_mlu = bernie$CHI_MLU)
 
 
+
+
+
 #dropping random effects from my model. 
   train_model <-  lm(CHI_MLU ~  TC3 + TC4 + TC1, avg_td_mlu)
   
 #create predictions from average pca scores. 
-  avg_predict_mlu <- predict(train_model, avg_td_mlu)
-  
 #creating a data frame of Bernie's data and the average predictions
   avg_td_mlu <- avg_td_mlu %>% 
-    mutate(avg_td_mlu = avg_predict_mlu) %>% 
+    mutate(avg_td_mlu = predict(train_model, avg_td_mlu),
+           avg_td_mlu = as.numeric(avg_td_mlu),
+           visit_difference = bernie_mlu - avg_td_mlu) %>% 
     gather(data, key, avg_td_mlu, bernie_mlu)
-  
+
+
+      
 #plotting them
   ggplot(avg_td_mlu, (aes(VISIT, key, color = data))) +
     geom_point() +
     geom_line()
 
-    
+
+#avg_td_mlu$visit_difference[1:7]
 
 
 
@@ -734,4 +741,45 @@ There isn't a singificant relation between AIC and rmse.
 Welcome to the last secret exercise. If you have already solved the previous exercises, and still there's not enough for you, you can expand your expertise by learning about penalizations. Check out this tutorial: http://machinelearningmastery.com/penalized-regression-in-r/ and make sure to google what penalization is, with a focus on L1 and L2-norms. Then try them on your data!
 
 
+```{r}
+# load the package
+library(glmnet)
+# load data
+predictor_columns <- pca_data %>% 
+  select(TC3, TC4, TC1 ) %>%  
+  as.matrix
+
+outcome_column <- pca_data %>% 
+  select(CHI_MLU) %>%
+  as.matrix
+# fit model
+fit <- glmnet(predictor_columns, outcome_column, family = "gaussian", alpha=0, lambda=0.001)
+# summarize the fit
+summary(fit)
+# make predictions
+predictions <- predict(fit, predictor_columns , type="link")
+
+# summarize accuracy
+ridge_mse <- mean((outcome_column - predictions)^2)
+
+print(ridge_mse)
+
+
+
+library(lars)
+# fit model
+fit <- lars(predictor_columns, outcome_column, type="lasso")
+# summarize the fit
+
+# select a step with a minimum error
+best_step <- fit$df[which.min(fit$RSS)]
+# make predictions
+predictions <- predict(fit, predictor_columns, s=best_step, type="fit")$fit
+# summarize accuracy
+lasso_mse <- mean((outcome_column - predictions)^2)
+print(lasso_mse)
+
+
+
+```
 

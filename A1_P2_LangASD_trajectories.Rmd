@@ -424,10 +424,9 @@ r.squaredGLMM(base_pca)
 #The three PCA models are nearly equal in R2 and AIC. However from the Anova we see that the pca_model2 explains the CHI_MLU significantly better.
 #final model
 
-the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+SUBJ|VISIT), pca_data)
+the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), pca_data)
 r.squaredGLMM(the_beauty)
 
-qqnorm(residuals(the_beauty))
 ```
 The qqplot of the distribution of the residuals looks dubious. However, I'll proceed without transformations of data
 
@@ -494,9 +493,9 @@ library(ModelMetrics)
 pc1 <- principal(da2[,c(3,7:9,11:14)], nfactors = 4, scores = TRUE, rotate = "oblimin")
 pca_data <- cbind(da2, pc1$scores)
 
-the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+SUBJ|VISIT), pca_data)
+the_beauty <-  lmer(CHI_MLU ~  TC3 + TC4 + TC1 + (1+VISIT|SUBJ), pca_data)
 
-test_test <- lmer(CHI_MLU ~ MOT_MLU * types_CHI + (1+SUBJ|VISIT), pca_data)
+test_test <- lmer(CHI_MLU ~ MOT_MLU * types_CHI + (1+VISIT|SUBJ), pca_data)
 
 predict <- predict.psych(pc1,pred_data[,c(2,6,10:11,13:16)])
 
@@ -518,4 +517,3 @@ corrgram(da2[,c(3,7:14)], col.regions = colorRampPalette(c("dodgerblue4",'dodger
 
 ```
 
-Fitting the pca based model on the new test set gave a root-mean-sqauared error of 0.345
