@@ -1,0 +1,401 @@
+---
+title: "Assignment 3 - Part 2 - Diagnosing Schizophrenia from Voice"
+author: "Riccardo Fusaroli"
+date: "October 17, 2017"
+---
+
+```{r setup, include=FALSE}
+library(pacman)
+
+p_load(tidyverse, stringr, lmerTest, boot)
+
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/cogsci/EM3/Assignment I/assignment1")
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+
+da <- read.csv("crqa_df.csv", sep = ",")
+
+da <- da %>% 
+  mutate(Subject = as.factor(Subject))
+```
+
+## Assignment 3 - Diagnosing schizophrenia from voice
+
+In the previous part of the assignment you generated a bunch of "features", that is, of quantitative descriptors of voice in schizophrenia, focusing on pitch.
+In the course of this assignment we will use them to try to automatically diagnose schizophrenia from voice only, that is, relying on the set of features you produced last time, we will try to produce an automated classifier.
+
+### Question 1
+Build a logistic regression to see whether you can diagnose schizophrenia from pitch range only.
+
+test for necessity of random effects
+```{r}
+da %>% group_by(Study, Diagnosis) %>% tally
+```
+```{r}
+da %>% group_by(Trial, Diagnosis) %>% tally
+```
+
+```{r}
+da %>% group_by(Diagnosis) %>% tally
+```
+
+```{r}
+
+mdl = glmer(Diagnosis ~ range + (1|Study), da ,family="binomial")
+#model is failing to converge
+summary(mdl)
+
+```
+```{r}
+library(sjPlot)
+library(sjmisc)
+library(sjlabelled)
+
+# set basic theme options
+set_theme(
+  base = theme_sjplot(),
+  axis.title.size = .85, 
+  axis.textsize = .85, 
+  legend.size = .8, 
+  geom.label.size = 3.5
+)
+
+sjp.glm(mdl, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "Diagnosis")
+```
+
+
+Calculate the different performance measures (accuracy, sensitivity, specificity, PPV, NPV, ROC curve) on a logistic regression using the full dataset. Don't forget the random effects!
+
+
+```{r}
+p_load(boot, caret,pROC)
+#first a column of predictions from the model is created
+
+da <- da %>% 
+  mutate(mdl_predictions_perc = inv.logit(predict(mdl, da)),
+         predictions = ifelse(mdl_predictions_perc > 0.5, "Schizophrenia","Control"),
+         predictions = as.factor(predictions)) #Schizophrenia is coded as 1
+
+
+caret::confusionMatrix(data = da$predictions, reference = da$Diagnosis, positive = "Schizophrenia") 
+
+rocCurve <- roc(response = da$Diagnosis,   predictor = da$mdl_predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+```
+We see that the model performs well above chance 95% CI for accuracy is [0,59;0.64]. We see that the models favors the schizophrenic diagnosis, which gives high senstivity =0.74, and a lower selectivity = 0.49. 
+
+
+Then cross-validate the logistic regression and re-calculate performance on the testing folds. N.B. The cross-validation functions you already have should be tweaked: you need to calculate these new performance measures.
+
+```{r}
+
+#defining function for cross validation of glmer models on the current data set.
+
+
+cross_validation <- function(model_formula){ 
+  
+  #creating folds  
+  Subjects = unique(da$Subject)
+  folds <- createFolds(Subjects, 5)
+  
+  #running loop
+  cross_val <- sapply(seq_along(folds), function(x) {
+    
+    train_folds = filter(da, !(as.numeric(Subject) %in% folds[[x]]))
+    predict_fold = filter(da, as.numeric(Subject) %in% folds[[x]])
+    
+    train_model <-  glmer(model_formula, train_folds ,family="binomial")
+    
+    
+    predict_fold <- predict_fold %>% 
+      mutate(predictions_perc = inv.logit(predict(train_model, predict_fold, allow.new.levels = T)),
+             predictions = ifelse(predictions_perc > 0.5, "Schizophrenia","Control"),
+             predictions = as.factor(predictions))
+    
+    conf_mat <- caret::confusionMatrix(data = predict_fold$predictions, reference = predict_fold$Diagnosis, positive = "Schizophrenia") 
+    
+    accuracy <- conf_mat$overall[1]
+    sensitivity <- conf_mat$byClass[1]
+    specificity <- conf_mat$byClass[2]
+    
+    predict_fold$Diagnosis <- as.factor(predict_fold$Diagnosis)
+    rocCurve <- roc(response = predict_fold$Diagnosis,   predictor = predict_fold$predictions_perc)
+    
+    auc = auc(rocCurve) 
+    
+    
+    fixed_ef <- fixef(train_model) 
+    
+    output <- c(accuracy, sensitivity, specificity, fixed_ef, auc)
+    
+  })
+  
+  cross_df <- t(cross_val)
+  return(cross_df)
+}
+
+
+mdl_formula <- as.formula(Diagnosis ~ scale(range) + (1|Study))
+
+Result <- cross_validation(mdl_formula)
+
+Result %>% as.data.frame() %>% summarise_all(funs(sd, mean))
+```
+For a 5 fold cross validation of our generalized linear mixed effect models we get the following average standard deviations and means:
+
+Error measures:
+sd of accuracy = 0.057% with a mean of 0.56
+sd of sensitiviy: 0.15% with a mean of 0.71
+sd of specificity: 0.12% with a mean of 0.41
+sd of AUC: 0.08 with a mean of 0.6
+
+coefficients:
+sd of intercept = 0.024% with a mean of 0.24
+sd of pitch_range = 0.03% with a mean of -0.17
+
+
+N.B. the predict() function generates probabilities (the full scale between 0 and 1). A probability > .5 indicates a choice of 1, below a choice of 0.
+N.B. you need to decide whether calculate performance on each single test fold or save all the prediction for test folds in one datase, so to calculate overall performance.
+N.B. Now you have two levels of structure: subject and study. Should this impact your cross-validation?
+
+### Question 2
+
+Whih single predictor is the best
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ rqa_rr + (Trial|Subject) + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+
+Reccurence rate predicts Diagnosis 
+
+
+#Looking at predictive power of different variables:
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ scale(rqa_DET) + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+We see that Determinism (% of RR forming diagonal lines) have an accuracy of 0.55
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ scale(rqa_L) + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+L (mean length of diagonal lines) has an accuracy of 0.51. Determinism is still the best predictor
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ rqa_rr + (+ (1|Study)))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+rr (% of datapoints recurring) gives an accuracy of 0.53%.
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ rqa_maxL + + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+```
+
+maxL (longest diagonal) gives an improved accuracy og 58%. With both a sensitivity and specificty above 50%.
+
+
+
+
+```{r}
+da %>% group_by(Diagnosis) %>% summarise(mean_maxL = mean(rqa_maxL, na.rm = T))
+```
+We see that for controls, they have on average a 113 longer max diagonal line. In other words, their longest repeated sequence of pitch use is on average 113 time points (roughly 113 milliseconds) longer.
+
+
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ MeanAbsoluteDeviation + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+
+
+
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ rqa_ENTR+ + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+Entropy (the uniformity of diagonal lines) has an accuracy of 0.55. 
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ scale(rqa_LAM) +  (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+Hmm. Using LAM (proportion of points forming vertical lines) we get an accuracy of 0.55.. However it suggests rescaling variables, which decreases its accuracy to around .51 - .53
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ rqa_TT + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+
+Lastly, I'll check of the amount of covariance in rqa measures
+
+```{r}
+library(psych)
+p_load(corrgram)
+variables <- da %>% 
+  select(Diagnosis, mean:rqa_LAM)
+
+#checking for sufficient covariance
+#the corrgram shows darker areas indicating covariance among predictors
+corrgram(variables, col.regions = colorRampPalette(c("dodgerblue4",'dodgerblue','white', 'gold',"firebrick4")),cor.method='pearson')
+
+
+```
+RQA measures
+We see that DET, ENTR,TT and LAM correlates positively with each other. Wheras maxL and L are generally not correlated or negatively correlater with each other.
+Non rqa related variables have internal correlation, especially stdDev correlated with the rest. However, most of them are negatively or not correlated with the rqa measures.
+
+```{r}
+
+cortest.bartlett(variables[,2:13]) # yields significant result, Chisq(66) = 17612, p = 0. In other words the correlation matrix is significantly different from an identity-matrix
+
+
+```
+
+The bartlett´s test shows that the covariance matrix is significantly different from an identity matrix, which I use as the criterion for enough covariance to reduce the rqa measure to some principal components
+
+```{r}
+pca <- principal(variables[,2:13], nfactors = length(2:13), scores = TRUE, rotate = "varimax")
+
+#Scree plot
+plot(pca$values, type = "b")
+
+```
+I keep four principal components for futher analysis and see if they predict schizophrenia.
+
+```{r}
+pca <- principal(variables[,2:13], nfactors = 3, scores = TRUE, rotate = "oblimin")
+
+#adding factor scores to data
+da <- cbind(da, pca$scores)
+
+
+print.psych(pca, cut = 0.3, sort = TRUE) #the factor loadings of each components is as expected from the covariance structure shown in the covariance matrix.
+
+```
+
+Cross validating how well principal components predicts schizophrenia.
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ TC1 + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+PC 1 has an accuracy of 0.54, which is not an improvement
+
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ TC2 + (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+```
+
+PC2 has an accuracy of 0.56% which is also not an improvement.
+
+
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ TC3+ (1|Study))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean))
+
+```
+
+finding AUC CI for TC2
+```{r}
+
+tc_mdl = glmer(Diagnosis ~ TC2+ (1|Study), family = "binomial", da)
+
+da_tc <- da %>% 
+  mutate(mdl_predictions_perc = inv.logit(predict(tc_mdl, da)),
+         predictions = ifelse(mdl_predictions_perc > 0.5, "Schizophrenia","Control"),
+         predictions = as.factor(predictions)) #Schizophrenia is coded as 1
+
+
+caret::confusionMatrix(data = da_tc$predictions, reference = da_tc$Diagnosis, positive = "Schizophrenia") 
+
+rocCurve <- roc(response = da_tc$Diagnosis,   predictor = da_tc$mdl_predictions_perc) 
+auc(rocCurve) 
+ci(rocCurve) 
+plot.roc(rocCurve)
+
+
+summary(tc_mdl)
+
+```
+
+
+
+
+### Question 3
+
+Now it's time to go wild! Use all (voice-related) variables and interactions you can think of. Compare models and select the best performing model you can find.
+
+
+
+
+```{r}
+mdl_formula <- as.formula(Diagnosis ~ MeanAbsoluteDeviation+ (Trial|Subject))
+
+cross_validation(mdl_formula) %>% as.data.frame() %>% summarise_all(funs(mean, sjstats::se))
+
+```
+
+```{r}
+
+
+```
+
+
+Remember:
+- Cross-validation or AIC are crucial to build the best model!
+- After choosing the model, train it on all the data you have
+- Save the model: save(modelName, file = "BestModelForever.rda")
+- Create a Markdown that can: a) extract the features from new pitch files (basically your previous markdown), b) load your model (e.g. load("BestModelForever.rda")), and c) predict the Diagnosis in the new dataframe.
+Send it to Celine and Riccardo by Monday (so they'll have time to run it before class)-
+
+### Question 4: Report the results
+
+Method: which features are extraced. what performance measure
+
+#results
+
+#evaluation: what kind of errors do my model make
+Biological interpreation of relation: what does our result about the properties of schizophrenic pitch. 
+
+METHODS SECTION: how did you analyse the data?
+
+RESULTS SECTION: can you diagnose schizophrenia based on voice? which features are used? Comment on the difference between the different performance measures.
+
+### Bonus question 5
+
+You have some additional bonus data involving speech rate, pauses, etc. Include them in your analysis. Do they improve classification?
+
+### Bonus question 6
+
+Logistic regression is only one of many classification algorithms. Try using others and compare performance. Some examples: Discriminant Function, Random Forest, Support Vector Machine, etc. The package caret provides them.
