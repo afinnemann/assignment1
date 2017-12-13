@@ -1,0 +1,364 @@
+---
+title: "Assignment2_Part1_VoiceInSchizophrenia"
+author: "Riccardo Fusaroli"
+date: "July 17, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_knit$set(root.dir = "~/cogsci/EM3/Assignment I/assignment1")
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+
+library(pacman)
+
+p_load(tidyverse, stringr, simr, crqa,tseriesChaos, lmerTest)
+p_load(tseriesChaos, nonlinearTseries,SparseM, crqa)
+
+```
+
+## Assignment 2 - Part 1 - Assessing voice in schizophrenia
+
+Schizophrenia has been associated with "inappropriate" voice, sometimes monotone, sometimes croaky. A few studies indicate that pitch might be an index of schizophrenia. However, an ongoing meta-analysis of the literature (which you will have a go at in the last assignment) indicates that pitch mean and standard deviation are only weak indicators of diagnosis. Can we do better with our new fancy complex skills?
+
+The corpus you are asked to analyse is a set of voice recordings from people with schizophrenia (just after first diagnosis) and 1-1 matched controls (on gender, age, education). Each participant watched 10 videos of triangles moving across the screen and had to describe them (so you have circa 10 recordings per person). I have already extracted the pitch once every 10 milliseconds and you will have to use this data to assess differences in the voice.
+
+N.B. Question to be answered via email to Celine: can you characterize voice in schizophrenia as acoustically different? Report the methods you used to answer this question and the results from the analyses. Add a couple of lines trying to interpret the results (make sense of the difference). E.g. People with schizophrenia tend to have high-pitched voice, and present bigger swings in their prosody than controls. Add a couple of lines describing limitations of the data/analyses if any is relevant.
+
+N.B. There are looots of files to be dealt with. Probably too many for your computer. This is a challenge for you. Some (complementary) possible strategies: You can select a subset of files only (and you have to justify your choice). You can learn how to use the apply() or map() functions. You can coordinate with classmates.
+
+1. In the course of this assignment you have to first select one datafile and figure out how to:
+
+- Extract "standard" descriptors of pitch: Mean, standard deviation, range
+- Extract less "standard" descriptors of pitch you can think of (e.g. median, iqr, mean absoluted deviation, coefficient of variation)
+- Extract "complex" descriptors: recurrence quantification analysis
+```{r}
+filenames <- list.files(path = "pitch", full.names = T)
+da <- read.delim(filenames[1])
+
+plot(da$f0)
+
+```
+
+Plotting pitch development over time
+
+
+Standard descriptors
+```{r}
+da %>% 
+  summarise(mean_pitch = mean(f0),
+            sd_pitch = sd(f0),
+            range = min(f0) - max(f0))
+
+```
+
+
+
+Less standard descriptors
+ (e.g. median, iqr, mean absoluted deviation, coefficient of variation)
+```{r}
+da %>% 
+  summarise(median_pitch = median(f0),
+            mean_abso_devi = mad(f0),
+            coef_of_var = sd(f0) / mean(f0))
+
+            
+
+```
+
+RCQ
+Calculating optimal delaay
+```{r}
+
+ 
+mutual(da$f0,lag.max = 50)
+
+tau = 10
+```
+Decision rule for choosing tau: Choose first value that is followed by an increase: I judge that tau = 10
+
+```{r}
+plot(false.nearest(da$f0,m=5,d=15,t=0))
+
+d <- 4
+```
+
+based on the false nearest neighbors I choose to keep 4 dimensions.
+A radius of 15 is tried for the crqa analysis.
+
+```{r}
+
+Results=crqa (da$f0, da$f0, delay=tau, embed=d, radius=15,normalize=0,rescale=0,mindiagline = 2,minvertline = 2)
+
+RP=Results$RP 
+RP = matrix(as.numeric(RP), nrow = ncol(RP))  
+cols = c("white","blue4") 
+image(RP, xlab = "", ylab = "", col = cols)
+
+
+```
+
+Extracting RQA measures
+```{r}
+Results$RR
+Results$L
+Results$DET
+
+```
+RR: The recurrence rate, i.e. the percentage of points in the phase space falling within the radius, is 7.2
+L: The average length of lines is 4.6
+DET: 86% of the recurrent points form diagnonal lines
+
+
+
+
+
+
+2. Second you will have to turn the code into a function and loop through all the files (or even better use apply/sapply/lapply)
+- Remember to extract the relevant information from the file names (Participant, Diagnosis, Trial, Study)
+
+
+Median parameters over all subjects are found:
+
+```{r}
+
+files <- list.files(path = "pitch", full.names = T)
+
+
+
+#parameter space. Max number of dimensions for embedding is set to 15
+par = list(lgM =  15, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 100, normalize = 0,  
+           rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  
+           recpt = FALSE,  fnnpercent = 10,  typeami = "mindip") 
+
+
+#Parameter optimization is done for all files
+result <- lapply(files[1:10], function(x) {
+  df <- read.delim(x)
+  param <- try(optimizeParam(df$f0,df$f0,par, min.rec= 3.5, max.rec= 4.5))
+  })
+
+
+
+#error trials are removed from list. Here it's exploited that errors have a different class
+result[sapply(result, function(x) !is.list(x))] <- NULL  
+
+#1200 participants remains.
+
+#List of paremters are turned into df and median is found. 
+median_params <- lapply(result, data.frame) %>%
+  bind_rows() %>% 
+  summarise_all(funs(median))
+
+
+
+median_params
+```
+
+Median params are
+Radius = 14.321
+embed dim = 5
+delay = 14
+
+```{r}
+radius = median_params[[1]]
+embed = median_params[[2]]
+delay = median_params[[3]]
+
+#importing participant data and extracting subject nr, diagnosis and trial
+
+
+crqa_result <- ldply(files, function(x) {
+  df <- read.delim(x)
+  
+  crqa <- try(crqa(df$f0, df$f0, delay=delay, embed=embed, radius=radius, normalize=0,rescale=0,mindiagline = 2,minvertline = 2))d
+  
+  crqa_df <- as.data.frame(NA)
+  
+  if(length(crqa) > 4){
+    crqa_df <- crqa_df %>% 
+  mutate(Subject = str_extract_all(x, regex("\\d{3}")), #adding subject col
+        Diagnosis = ifelse(str_detect(x,"D1"),"Schizophrenia","Control"), #diagnosis col
+        Study = str_extract_all(x, "Study[[:digit:]]"), #Study col
+        Trial = str_extract_all(x, "T[[:digit:]]+"),
+        file = x,
+        mean = mean(df$f0, na.rm = T),
+        stdDev = sd(df$f0, na.rm = T),
+        range = max(df$f0) - min(df$f0),
+        median = median(df$f0),
+        MeanAbsoluteDeviation = mad(df$f0),
+        coefficientOfVariation = (sd(df$f0) / mean(df$f0)),
+        rqa_rr = crqa[[1]],
+        rqa_DET = crqa[[2]],
+        rqa_maxL = crqa[[4]],
+        rqa_L = crqa[[5]],
+        rqa_ENTR = crqa[[6]],
+        rqa_LAM = crqa[[8]],
+        rqa_TT = crqa[[9]])
+      
+  }else{
+      crqa_df <- crqa_df %>% 
+  mutate(Subject = str_extract_all(x, regex("\\d{3}")), #adding subject col
+        Diagnosis = ifelse(str_detect(x,"D1"),"Schizophrenia","Control"), #diagnosis col
+        Study = str_extract_all(x, "Study[[:digit:]]"), #Study col
+        Trial = str_extract_all(x, "T[[:digit:]]+"),
+        file = x,
+        mean = mean(df$f0, na.rm = T),
+        stdDev = sd(df$f0, na.rm = T),
+        range = max(df$f0) - min(df$f0),
+        median = median(df$f0),
+        MeanAbsoluteDeviation = mad(df$f0),
+        coefficientOfVariation = (sd(df$f0) / mean(df$f0)),
+        rqa_rr=NA,
+        rqa_DET = NA,
+        rqa_maxL = NA,
+        rqa_L = NA,
+        rqa_ENTR = NA,
+        rqa_LAM = NA,
+        rqa_TT = NA)
+  }
+  
+  }) 
+
+crqa_df <- crqa_result %>% 
+  mutate(Subject = unlist(Subject),
+         Study = unlist(Study),
+         Subject = as.factor(Subject),
+         Diagnosis = as.factor(Diagnosis),
+         Study = as.numeric(str_extract_all(Study, "[[:digit:]]")),
+         Trial = as.numeric(str_extract_all(Trial, "[[:digit:]]+"))) 
+  crqa_df <- crqa_df[2:19]
+
+
+
+#write.csv(crqa_df, "crqa_df.csv", row.names = F)
+
+```
+
+3. Make one model per acoustic feature and test whether you can observe significant difference due to Diagnosis. Tip: Which other fixed factors should you control for (that is, include in the model)? Which random ones?
+
+Random effects: We let the effect of time (Trial) have individual baseline and development. Since we have a study desgin where each patient is matched by a control, we take into account that the accuracy of this match can vary. We do that by letter the effect of diagnosis vary. Lastly, we account for a possibly difference is baseline effects of the different studies.
+
+Of fixed effects Study and Diagnosis is included as well as an interaction term.
+
+As outcome variables models for recurrence rate and mean length of recurrence are made.
+
+```{r}
+  setwd("~/cogsci/EM3/Assignment I/assignment1")
+  
+  
+  crqa_df <- read.csv("crqa_df.csv")
+
+str(crqa_df)
+
+crqa_df <- crqa_df %>% 
+  mutate(Subject = as.factor(Subject),
+         Study = as.integer(Study))
+
+rr_mdl <- lmer(rqa_rr ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(rr_mdl)
+
+
+
+
+```
+
+We see a significant effect of diagnosis on recurrence rate. People with schizophrenia have higher reccurence rate  (beta = 2.4, sd = 1.114, t(83)=2.64, p = 0.01). 
+```{r}
+DET_mdl <- lmer(rqa_DET ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(DET_mdl)
+
+```
+We see no significant effct of DET
+
+```{r}
+maxL_mdl <- lmer(rqa_maxL ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(maxL_mdl)
+```
+```{r}
+ENTR_mdl <- lmer(rqa_ENTR ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(ENTR_mdl)
+```
+
+```{r}
+TT_mdl <- lmer(rqa_TT ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(TT_mdl)
+```
+
+- Bonus points: cross-validate the model and report the betas and standard errors from all rounds to get an idea of how robust the estimates are. 
+
+```{r}
+
+p_load(tidyverse, stringr, lmerTest, MuMIn, psych, corrgram, ModelMetrics, caret)
+
+folds <- createFolds(crqa_df, 5)
+error <- matrix(nrow = length(folds), ncol = 1)
+
+fixed_coefs = matrix(nrow = length(folds), ncol = 2)
+
+colnames(fixed_coefs) <- c("intercept", "predictor3")
+
+for (i in seq_along(folds)) {
+  train_folds = filter(crqa_df, !(Subject %in% folds[[i]]))
+  predict_fold = filter(crqa_df, Subject %in% folds[[i]])
+  
+  train_model <-   lmer(rqa_rr ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+  
+  test_error <- predict(train_model, predict_fold, allow.new.levels = T)
+  
+  error[i] <- ModelMetrics::rmse(predict_fold$CHI_MLU,test_error)
+  
+  fixed_coefs[i,] <- fixef(train_model) 
+  
+}
+fixed_coefs
+mean(error, na.rm = T)
+
+
+
+```
+
+
+3a. Is study a significant predictor in these models? What should you infer from this? Does study interact with diagnosis? What should you infer from this?
+
+```{r}
+
+crqa_df <- crqa_df %>% 
+  mutate(Subject = as.factor(Subject))
+
+rr_mdl <- lmer(rqa_rr ~ Study + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+
+summary(rr_mdl)
+```
+
+
+
+```{r}
+rr_mdl <- lm(rqa_rr ~ Study , crqa_df)
+
+summary(rr_mdl)
+
+```
+
+```{r}
+rr_mdl <- lmer(scale(rqa_rr) ~ Study*Diagnosis + (Diagnosis + Trial| Subject) + (1|Study), crqa_df)
+
+summary(rr_mdl)
+```
+
+
+4. Bonus Question: Compare effect size of diagnosis across the different measures. Which measure seems most sensitive?
+- Tip: to compare across measures you need to put all of them on the same scale, that is, you need to "standardize" them (z-score)
+
+5. Bonus question. In the Clinical Info file you have additional information about the participants. Which additional parameters (e.g. age, gender) should we control for? Report the effects.
+
+6. Write a paragraph reporting methods and results
+
+[Next assignment: can we use these measures to build a tool that diagnoses people from voice only?]
+
+## N.B. Remember to save the acoustic features of voice in a separate file, so to be able to load them next time
