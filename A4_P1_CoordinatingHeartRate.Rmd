@@ -1,0 +1,856 @@
+---
+title: "Assignment 4 - Coordinating Heart Rate"
+author: "Riccardo Fusaroli"
+date: "November 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Analysing Heart Rate and Respiration data
+
+The goal of this assignment is to first familiarize you with heart rate, and respiration data and their preprocessing. The second part explores how to analyze interpersonal coordination of these signals.
+
+These are the questions you need to be able to answer at the end of the assignment (aka that you need to submit as part of the portfolio)
+
+1) How do you preprocess heart rate and respiration data? Describe the process. If any data needs to be excluded, list the excluded data and motivate the exclusion.
+
+2) Do you observe interpersonal coordination in heart rate and respiration? Describe your control baseline, the method used to quantify coordination, and the statistical models used to infer whether coordination was higher than in the baseline. Report the results of the models.
+
+  3) Do you observe differences in coordination between conditions? Report the models and results.
+
+4) Is respiration coordination a likely driver of heart rate coordination? Describe how you would test for it. Bonus points if you actually run the tests and report methods and results.
+
+N.B. to give you a bit more data I included data from last year (Study1) and from your class (Study2). Note that synchronouns and turn-taking are the same across both studies, but the third condition is different: last year it was self-paced joint reading; this year it was the tv-series conversation. So you might want to exclude the self-paced reading (but, up to you!)
+
+## Step by step suggestions to solve the assignment
+
+### Exploring physiological signals
+
+- Choose one pair (one pair, three conditions)
+#Choosing pair nr 3!!
+
+- Load the logs
+```{r}
+library(pacman)
+p_load(groupdata2,tidyverse, dplyr)
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+prepro_filelist = list.files(pattern = "G5") # load the preprocessed files
+
+da <- tibble(prepro_filelist) %>% 
+  mutate(data =  lapply(prepro_filelist, read.csv, sep = ",")) %>% 
+  unnest()
+
+```
+
+- Produce a plot of the participants' respiration signal and a different one of the participants' HR signal (for inspecting whether the data is usable)
+  N.B: remember the slides: artifacts, downsampling, scaling.
+  N.B. The gridExtra::grid.arrange() function allows you to display the plots side by side. E.g. grid.arrange(plot1, plot2, plot3, ncol=3)
+```{r}
+
+#list of every 100th file name
+file = da[seq(1,nrow(da), 100),1] #every 100 file
+file2 = as.data.frame(file$prepro_filelist) 
+colnames(file2) = "file"
+
+#function for removing outliers
+RemoveOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) + (threshold*sd(ts,na.rm=T))) 
+     |  
+       ts < (mean(ts,na.rm=T) - (threshold*sd(ts,na.rm=T)))] = mean(ts,na.rm=T)   
+return(ts)}
+
+
+preproc  = da %>% 
+  mutate(prepro_filelist = as.factor(prepro_filelist)) %>% 
+  group_by(prepro_filelist) %>% 
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(time= mean(time,na.rm=T),
+                   HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T),
+                   file = prepro_filelist[1])
+
+
+threshold = 2.5
+
+preproc2 <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold),
+         HR1 = scale(HR1),
+         HR2 = scale(HR2),
+         Resp1 = scale(Resp1),
+         Resp2 = scale(Resp2))
+
+#grouping of files misplaces last entries. These are removed. 
+#slicing last data point for each file.
+preproc = preproc %>% 
+  group_by(file) %>% 
+  slice(1:(n()-1))
+
+  
+  
+
+```
+  
+Comparisons of heart rates for each participant across trials
+```{r}
+preproc3 %>% 
+  gather(key,value, HR1, HR2) %>% 
+  ggplot(aes(y =value, x = time, color = value)) +
+  geom_line() +
+  facet_wrap(key~file, scale = "free") +
+  theme(legend.position="none") +
+  labs(title = "Heart rate comparison across trials. Participant 1 above ", ylab = "heart rate per particiapnt")
+
+```
+  
+Comparison of respiration for both participants across all three trials
+```{r}
+preproc3 %>% 
+  gather(key,value, Resp1, Resp2) %>% 
+  ggplot(aes(y =value, x = time, color = value)) +
+  geom_line() +
+  facet_wrap(key~file, scale = "free") +
+  theme(legend.position="none") +
+  labs(title = "Respiration comparison across trials. Participant 1 above ", ylab = "Respiration per particiapnt") 
+
+
+```
+
+
+
+  
+- Can you eye-ball which condition if any displays more physiological coordination?
+Answer: My guess would be heart rates in T3. There tops and "vallys" seem to be alligned.
+
+- Run crqa on heart rate and respiration data (find parameters, run crqa)
+```{r}
+p_load(tseriesChaos, nonlinearTseries,SparseM, crqa)
+da = preproc2 %>% 
+  filter(file == "Study1_G3_T1_SelfPaced.csv")
+
+
+par = list(lgM =  15, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+
+
+ans_resp = optimizeParam(da$Resp1, da$Resp2, par, min.rec = 2, max.rec = 8)
+
+radius= ans_resp[[1]]
+embdim= ans_resp[[2]]
+delay = ans_resp[[3]]
+
+
+Results_resp=crqa (da$Resp1, da$Resp2, delay=delay, embed=embdim,radius=radius,normalize=0,rescale=0,mindiagline = 2,minvertline = 2)
+
+RP=Results_resp$RP 
+RP = matrix(as.numeric(RP), nrow = ncol(RP))  
+cols = c("white","blue4") 
+image(RP, xlab = "", ylab = "", col = cols)
+
+```
+
+- Does this tell you more than just eyeballing the plots?
+
+### Systematically pre-process the data
+- Loop through all the files (either with a loop or with a function), check which files should be excluded, if any, and save the pre-processed time-series. Tip: plot and visually inspect the data to figure out which should be excluded.
+
+```{r}
+library(pacman)
+p_load(tseriesChaos, nonlinearTseries,SparseM, crqa,groupdata2, tidyverse, plyr)
+
+RemoveOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) + (threshold*sd(ts,na.rm=T))) 
+     |  
+       ts < (mean(ts,na.rm=T) - (threshold*sd(ts,na.rm=T)))] = mean(ts,na.rm=T)   
+return(ts)}
+threshold = 2.5
+
+par = list(lgM =  15, steps = seq(1, 6, 1),  radiusspan = 100,  radiussample = 40, normalize = 0,  rescale = 0,  mindiagline = 2,  minvertline = 2,  tw = 0,  whiteline = FALSE,  recpt = FALSE,  fnnpercent = 10,  typeami = "mindip")
+
+
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+prepro_filelist = list.files( pattern = "Study") # load the preprocessed files
+
+
+  
+optimizeparam_result <- ldply(prepro_filelist, function(x) { #ldply takes the row produces per run and turn into df
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+
+  df <- read.delim(x, sep = ",")
+  
+  
+  
+  preproc  = df %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(time= mean(time,na.rm=T),
+                   HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T))
+
+
+
+
+preproc <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold),
+         HR1 = scale(HR1),
+         HR2 = scale(HR2),
+         Resp1 = scale(Resp1),
+         Resp2 = scale(Resp2))
+
+
+  ans_HR = try(optimizeParam(preproc$HR1, preproc$HR2, par, min.rec = 2, max.rec = 8))
+  if (length(ans_HR)< 3){ans_HR = c(NA,NA,NA)}
+  
+  ans_resp = try(optimizeParam(preproc$Resp1, preproc$Resp2, par, min.rec = 2, max.rec = 8))
+  if (length(ans_resp)< 3){ans_resp = c(NA,NA,NA)}
+  
+  params = data.frame(HR_radius = ans_HR[[1]], HR_embdim = ans_HR[[2]], HR_delay = ans_HR[[3]],
+                      resp_radius = ans_resp[[1]], resp_embdim = ans_resp[[2]], resp_delay = ans_resp[[3]])
+  
+  
+}
+)
+
+mean_params <- optimizeparam_result %>% 
+  summarise_all(funs(mean(.,na.rm = T)))
+mean_params
+```
+
+```{r}
+#rounded values from mean_params
+HR_radius = 1.5
+HR_embdim = 16
+HR_delay = 3
+resp_radius = 1.5
+resp_embdim = 5
+resp_delay =9
+
+
+
+  crqa_result2 <- ldply(prepro_filelist, function(x) { #ldply takes the row produces per run and turn   into df
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+
+  df <- read.delim(x, sep = ",")
+    
+  preproc  = df %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(time= mean(time,na.rm=T),
+                   HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T))
+
+
+
+
+preproc <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold),
+         HR1 = scale(HR1),
+         HR2 = scale(HR2),
+         Resp1 = scale(Resp1),
+         Resp2 = scale(Resp2))
+
+
+
+    crqa_resp <- try(crqa(preproc$Resp1, preproc$Resp2, delay=resp_delay, embed=resp_embdim, 
+                          radius=resp_radius, normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+    
+    crqa_HR <- try(crqa(preproc$HR1, preproc$HR2, delay=HR_delay, embed=HR_embdim, radius=HR_radius, 
+                        normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+  
+  crqa_df <- as.data.frame(NA)
+  
+  if(length(crqa_HR) > 5){
+    crqa_df <- crqa_df %>% 
+    mutate(group = str_match(x, "G[:digit:]")[[1]],
+         condition = str_match(x, "[a-zA-Z]{6,}")[[1]], #adding subject col
+         Trial = str_match(x, "T[:digit:]")[1],
+         Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study col
+         Trial = str_extract_all(x, "T[[:digit:]]+")[[1]],
+         file = x,
+         rqa_rr_HR = crqa_HR[[1]],
+         rqa_DET_HR = crqa_HR[[2]],
+         rqa_maxL_HR = crqa_HR[[4]],
+         rqa_L_HR = crqa_HR[[5]],
+         rqa_ENTR_HR = crqa_HR[[6]],
+         rqa_LAM_HR = crqa_HR[[8]],
+         rqa_TT_HR = crqa_HR[[9]])
+            
+    if(length(crqa_resp) > 2){
+                  crqa_df <- crqa_df %>% 
+                            mutate(rqa_rr_resp = crqa_resp[[1]],
+                                    rqa_DET_resp = crqa_resp[[2]],
+                                   rqa_maxL_resp = crqa_resp[[4]],
+                                   rqa_L_resp = crqa_resp[[5]],
+                                   rqa_ENTR_resp = crqa_resp[[6]],
+                                   rqa_LAM_resp = crqa_resp[[8]],
+                                   rqa_TT_resp = crqa_resp[[9]])
+    
+                  }else{
+      
+                    crqa_df <- crqa_df %>% 
+                      mutate(rqa_rr_resp = NA,
+                             rqa_DET_resp = NA,
+                             rqa_maxL_resp = NA,
+                             rqa_L_resp = NA,
+                             rqa_ENTR_resp = NA,
+                             rqa_LAM_resp = NA,
+                             rqa_TT_resp = NA)
+                    }
+    }else{
+      crqa_df <- crqa_df %>% 
+        mutate(group = str_match(x, "G[:digit:]")[[1]],
+               condition = str_match(x, "[a-zA-Z]{6,}")[[1]], #adding subject col
+               Trial = str_match(x, "T[:digit:]")[[1]],
+               Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study col
+               Trial = str_extract_all(x, "T[[:digit:]]+")[[1]],
+               file = x,
+               rqa_rr_HR = NA,
+               rqa_DET_HR = NA,
+               rqa_maxL_HR = NA,
+               rqa_L_HR = NA,
+               rqa_ENTR_HR = NA,
+               rqa_LAM_HR = NA,
+               rqa_TT_HR = NA)
+      if(length(crqa_resp) > 2){
+              crqa_df <- crqa_df %>% 
+                mutate(rqa_rr_resp = crqa_resp[[1]],
+                       rqa_DET_resp = crqa_resp[[2]],
+                       rqa_maxL_resp = crqa_resp[[4]],
+                       rqa_L_resp = crqa_resp[[5]],
+                       rqa_ENTR_resp = crqa_resp[[6]],
+                       rqa_LAM_resp = crqa_resp[[8]],
+                       rqa_TT_resp = crqa_resp[[9]])
+              }else{
+                crqa_df <- crqa_df %>% 
+                  mutate(rqa_rr_resp = NA,
+                         rqa_DET_resp = NA,
+                         rqa_maxL_resp = NA,
+                         rqa_L_resp = NA,
+                         rqa_ENTR_resp = NA,
+                         rqa_LAM_resp = NA,
+                         rqa_TT_resp = NA)
+                }
+    
+      
+    }
+
+  
+  } #finish ldply function call
+)#finish ldply loo
+  
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+#write.csv(crqa_result2, "crqa_data.csv")
+
+```
+
+ 
+- Run crqa on all the pre-processed time-series and save the output (don't forget to add columns with study, group, condition and trial). Tip: remember to first assess optimal parameters (dimensions, delay, radius) across all timeseries. Tip: it will often fail, just take whatever parameters you get, select optimal across timeseries parameters and run crqa on all timeseries with those. Tip: double check the rr. When I ran the loop, I got very low rr, so I adjusted the radius until the average of rr across all pairs was approx. 4%.
+
+### Creating controls: shuffled controls
+ - loop through all pairs and conditions
+
+ - shuffle the timeseries (take a timeseries and rearrange its values in a random order). Tip check the sample() function
+ - run crqa and save the output. NB. which delay, embed, radius parameters should you use?
+ - statistically compare the crqa indexes in real and shuffled pairs
+ 
+ computing optimize optimial parameters based on shuffled time series
+```{r}
+HR_radius = 1.5
+HR_embdim = 16
+HR_delay = 3
+resp_radius = 1.5
+resp_embdim = 5
+resp_delay =9
+
+
+
+  shuffled_crqa <- ldply(prepro_filelist, function(x) { #ldply takes the row produces per run and turn   into df
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+
+  df <- read.delim(x, sep = ",")
+    
+  preproc  = df %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(time= mean(time,na.rm=T),
+                   HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T))
+
+
+
+
+preproc <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold),
+         HR1 = scale(HR1),
+         HR2 = scale(HR2),
+         Resp1 = scale(Resp1),
+         Resp2 = scale(Resp2),
+         HR1 = sample(HR1), #shuffling time series
+         HR2 = sample(HR2),
+         Resp1 = sample(Resp1),
+         Resp2 = sample(Resp2))
+
+
+
+    crqa_resp <- try(crqa(preproc$Resp1, preproc$Resp2, delay=resp_delay, embed=resp_embdim, 
+                          radius=resp_radius, normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+    
+    crqa_HR <- try(crqa(preproc$HR1, preproc$HR2, delay=HR_delay, embed=HR_embdim, radius=HR_radius, 
+                        normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+  
+  crqa_df <- as.data.frame(NA)
+  
+  if(length(crqa_HR) > 5){
+    crqa_df <- crqa_df %>% 
+    mutate(group = str_match(x, "G[:digit:]")[[1]],
+         condition = str_match(x, "[a-zA-Z]{6,}")[[1]], #adding subject col
+         Trial = str_match(x, "T[:digit:]")[1],
+         Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study col
+         Trial = str_extract_all(x, "T[[:digit:]]+")[[1]],
+         file = x,
+         rqa_rr_HR = crqa_HR[[1]],
+         rqa_DET_HR = crqa_HR[[2]],
+         rqa_maxL_HR = crqa_HR[[4]],
+         rqa_L_HR = crqa_HR[[5]],
+         rqa_ENTR_HR = crqa_HR[[6]],
+         rqa_LAM_HR = crqa_HR[[8]],
+         rqa_TT_HR = crqa_HR[[9]])
+            
+    if(length(crqa_resp) > 2){
+                  crqa_df <- crqa_df %>% 
+                            mutate(rqa_rr_resp = crqa_resp[[1]],
+                                    rqa_DET_resp = crqa_resp[[2]],
+                                   rqa_maxL_resp = crqa_resp[[4]],
+                                   rqa_L_resp = crqa_resp[[5]],
+                                   rqa_ENTR_resp = crqa_resp[[6]],
+                                   rqa_LAM_resp = crqa_resp[[8]],
+                                   rqa_TT_resp = crqa_resp[[9]])
+    
+                  }else{
+      
+                    crqa_df <- crqa_df %>% 
+                      mutate(rqa_rr_resp = NA,
+                             rqa_DET_resp = NA,
+                             rqa_maxL_resp = NA,
+                             rqa_L_resp = NA,
+                             rqa_ENTR_resp = NA,
+                             rqa_LAM_resp = NA,
+                             rqa_TT_resp = NA)
+                    }
+    }else{
+      crqa_df <- crqa_df %>% 
+        mutate(group = str_match(x, "G[:digit:]")[[1]],
+               condition = str_match(x, "[a-zA-Z]{6,}")[[1]], #adding subject col
+               Trial = str_match(x, "T[:digit:]")[[1]],
+               Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study col
+               Trial = str_extract_all(x, "T[[:digit:]]+")[[1]],
+               file = x,
+               rqa_rr_HR = NA,
+               rqa_DET_HR = NA,
+               rqa_maxL_HR = NA,
+               rqa_L_HR = NA,
+               rqa_ENTR_HR = NA,
+               rqa_LAM_HR = NA,
+               rqa_TT_HR = NA)
+      if(length(crqa_resp) > 2){
+              crqa_df <- crqa_df %>% 
+                mutate(rqa_rr_resp = crqa_resp[[1]],
+                       rqa_DET_resp = crqa_resp[[2]],
+                       rqa_maxL_resp = crqa_resp[[4]],
+                       rqa_L_resp = crqa_resp[[5]],
+                       rqa_ENTR_resp = crqa_resp[[6]],
+                       rqa_LAM_resp = crqa_resp[[8]],
+                       rqa_TT_resp = crqa_resp[[9]])
+              }else{
+                crqa_df <- crqa_df %>% 
+                  mutate(rqa_rr_resp = NA,
+                         rqa_DET_resp = NA,
+                         rqa_maxL_resp = NA,
+                         rqa_L_resp = NA,
+                         rqa_ENTR_resp = NA,
+                         rqa_LAM_resp = NA,
+                         rqa_TT_resp = NA)
+                }
+    
+      
+    }
+
+  
+  } #finish ldply function call
+)#finish ldply loo
+
+#write.csv(shuffled_crqa, file ="shuffled_crqa.csv")
+  
+```
+
+
+ 
+### TRICKY! Creating controls: surrogate pair controls
+ - Per each real pair, identify at least one surrogate pair (matching one of the participants, with somebody doing the same task, but in a different pair). Tip: Celine will share a commented script
+ - Run crqa on all the surrogate pairs and save the output. NB. which delay, embed, radius parameters should you use?
+ 
+
+ 
+```{r}
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+
+prepro_filelist = list.files(pattern = "Study2") # load the preprocessed files
+
+num=str_extract_all(prepro_filelist, "\\d+") #extract all numbers in the file name (i.e Study?_G?_T?)
+
+df= as.data.frame(t(as.data.frame(num))) #create a transposed (i.e. "tipped") dataframe of these number
+rownames(df)<-NULL #Remove rownames.
+
+#set 1,2,3,4 for study 1
+pairs=c(5,6,7,8,9,10)#create pairs, i.e. unique group numbers
+
+SurrogateList <- expand.grid(a = pairs, b = pairs) # expand.grid combines all possible combinations of a given vector
+SurrogateList = subset(SurrogateList, a != b) # Ensure that pair 1 (i.e group1) doesn't get paired with it self.
+
+
+# Per each condition
+for (co in c("Synchronous","TurnTaking","SelfPaced")){ #loop through a list of condintions 
+  for (i in 1:nrow(SurrogateList)){ #and loop through all the pairings of the surrogate list
+    
+  #start recreate filenames from the working directory based on the matching from the surrogatelist
+  f1=paste0('Study2_G',SurrogateList$a[i]) #Insert group numeber from Surrogatelist 
+  f2=paste0('Study2_G',SurrogateList$b[i])
+  
+  file1=prepro_filelist[grepl(f1,prepro_filelist) & grepl(co,prepro_filelist)] #insert conditions as well.
+  file2=prepro_filelist[grepl(f2,prepro_filelist) & grepl(co,prepro_filelist)]
+  
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+  d1=read.csv(file1) #Load the recreated filenames
+  
+  d2=read.csv(file2) 
+  
+  #Ensure both dataframes have the same length
+  if (nrow(d1)>nrow(d2)){
+    d1=d1[1:nrow(d2),]
+  } else {
+    d2=d2[1:nrow(d1),]
+  }
+  
+  #creation of surrogate files. (Riccardo's idea of having fun and completely overdoing it ;-) ) 
+  #per each 2 pairs there are 4 possible surrogate pairs: 
+  #pair1person1 w pair2person2; 
+  
+  d3=data.frame(Resp1=d1$Resp1,Resp2=d2$Resp2,HR1=d1$HR1,HR2=d2$HR2,Resp1S=d1$Resp1,Resp2S=d2$Resp2,HR1S=d1$HR1,HR2S=d2$HR2)
+  
+  
+  #Make filenames that tells which pairs have been mixed
+  file3=paste0("Study2_SurrogateGroup",SurrogateList$a[i],"&",SurrogateList$b[i],"a_",co,".csv")
+  
+  
+  #write csv files
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+  write_csv(d3,file.path("surrogate",file3))
+  
+  }
+}
+##NOW DO THE SAME FOR STUDY 2##
+
+```
+ 
+ 
+ - Test whether crqa shows a difference between real and surrogate pairs
+ 
+ 
+```{r}
+library(pacman)
+p_load(tseriesChaos, nonlinearTseries,SparseM, crqa,groupdata2, tidyverse, plyr)
+
+HR_radius = 1.5
+HR_embdim = 16
+HR_delay = 3
+resp_radius = 1.5
+resp_embdim = 5
+resp_delay =9
+
+threshold = 2.5
+
+#function for removing outliers
+RemoveOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) + (threshold*sd(ts,na.rm=T))) 
+     |  
+       ts < (mean(ts,na.rm=T) - (threshold*sd(ts,na.rm=T)))] = mean(ts,na.rm=T)   
+return(ts)}
+
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData/surrogate")
+surrogate_filelist = list.files()
+
+#error in surrogate file 97
+  surrogate_crqa <- ldply(surrogate_filelist[1:96], function(x) { #ldply takes the row produces per run and turn   into df
+    
+  setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData/surrogate")
+
+  df <- read.delim(x, sep = ",")
+    
+  preproc  = df %>%
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T))
+
+
+
+
+preproc <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold),
+         HR1 = scale(HR1),
+         HR2 = scale(HR2),
+         Resp1 = scale(Resp1),
+         Resp2 = scale(Resp2))
+
+
+    crqa_resp <- try(crqa(preproc$Resp1, preproc$Resp2, delay=resp_delay, embed=resp_embdim, 
+                          radius=resp_radius, normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+    
+    crqa_HR <- try(crqa(preproc$HR1, preproc$HR2, delay=HR_delay, embed=HR_embdim, radius=HR_radius, 
+                        normalize=0,rescale=0,mindiagline = 2,minvertline = 2))
+  
+  crqa_df <- as.data.frame(NA)
+  
+  if(length(crqa_HR) > 5){
+    crqa_df <- crqa_df %>% 
+    mutate(groups = str_match(x, ".&.")[[1]],
+         condition = str_match(x, "[a-zA-Z]{6,}.csv")[[1]], #adding subject col
+         Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study co
+         file = x,
+         rqa_rr_HR = crqa_HR[[1]],
+         rqa_DET_HR = crqa_HR[[2]],
+         rqa_maxL_HR = crqa_HR[[4]],
+         rqa_L_HR = crqa_HR[[5]],
+         rqa_ENTR_HR = crqa_HR[[6]],
+         rqa_LAM_HR = crqa_HR[[8]],
+         rqa_TT_HR = crqa_HR[[9]])
+            
+    if(length(crqa_resp) > 2){
+                  crqa_df <- crqa_df %>% 
+                            mutate(rqa_rr_resp = crqa_resp[[1]],
+                                    rqa_DET_resp = crqa_resp[[2]],
+                                   rqa_maxL_resp = crqa_resp[[4]],
+                                   rqa_L_resp = crqa_resp[[5]],
+                                   rqa_ENTR_resp = crqa_resp[[6]],
+                                   rqa_LAM_resp = crqa_resp[[8]],
+                                   rqa_TT_resp = crqa_resp[[9]])
+    
+                  }else{
+      
+                    crqa_df <- crqa_df %>% 
+                      mutate(rqa_rr_resp = NA,
+                             rqa_DET_resp = NA,
+                             rqa_maxL_resp = NA,
+                             rqa_L_resp = NA,
+                             rqa_ENTR_resp = NA,
+                             rqa_LAM_resp = NA,
+                             rqa_TT_resp = NA)
+                    }
+    }else{
+      crqa_df <- crqa_df %>% 
+        mutate(groups = str_match(x, ".&.")[[1]],
+         condition = str_match(x, "[a-zA-Z]{6,}.csv")[[1]], #adding subject col
+         Study = str_extract_all(x, "Study[[:digit:]]")[[1]], #Study co
+         file = x,
+         rqa_rr_HR = crqa_HR[[1]],
+         rqa_DET_HR = crqa_HR[[2]],
+         rqa_maxL_HR = crqa_HR[[4]],
+         rqa_L_HR = crqa_HR[[5]],
+         rqa_ENTR_HR = crqa_HR[[6]],
+         rqa_LAM_HR = crqa_HR[[8]],
+         rqa_TT_HR = crqa_HR[[9]])
+    
+      if(length(crqa_resp) > 2){
+              crqa_df <- crqa_df %>% 
+                mutate(rqa_rr_resp = crqa_resp[[1]],
+                       rqa_DET_resp = crqa_resp[[2]],
+                       rqa_maxL_resp = crqa_resp[[4]],
+                       rqa_L_resp = crqa_resp[[5]],
+                       rqa_ENTR_resp = crqa_resp[[6]],
+                       rqa_LAM_resp = crqa_resp[[8]],
+                       rqa_TT_resp = crqa_resp[[9]])
+              }else{
+                crqa_df <- crqa_df %>% 
+                  mutate(rqa_rr_resp = NA,
+                         rqa_DET_resp = NA,
+                         rqa_maxL_resp = NA,
+                         rqa_L_resp = NA,
+                         rqa_ENTR_resp = NA,
+                         rqa_LAM_resp = NA,
+                         rqa_TT_resp = NA)
+                }
+    
+      
+    }
+
+  
+  } #finish ldply function call
+)#finish ldply loo
+
+#write.csv(surrogate_crqa, file ="surrogate_crqa.csv")
+
+```
+
+```{r}
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+
+surrogate = read.csv("surrogate_crqa.csv") %>% 
+  select(-X) %>% 
+  rename(c("groups"="group")) %>% 
+  mutate(type = "surrogate")
+
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+da = read.csv("crqa_data.csv") %>% 
+  select(-X, - Trial) %>% 
+  mutate(type = "real")
+shuf_da = read.csv("shuffled_crqa.csv") %>% 
+  select(-X, - Trial) %>% 
+  mutate(type = "shuffled")
+
+summary(lmer(rqa_rr_HR~ type + (1|group) + (1|Study), full))
+
+ 
+```
+
+
+```{r}
+summary(lmer(rqa_DET_HR~ type + (1|group) + (1|Study), full))
+```
+
+
+```{r}
+summary(lmer(rqa_rr_resp~ type + (1|group) + (1|Study), full))
+```
+
+```{r}
+summary(lmer(rqa_DET_resp~ type + (1|group) + (1|Study), full))
+```
+
+
+### Testing effects of conditions
+ - make a (probably underpowered) mixed model testing effects of the different conditions on heart rate and respiration coordination
+ 
+```{r}
+library(lmerTest)
+
+mdl1 = lmer(rqa_rr_HR ~ condition + (1|group) + (1|Study), da)
+
+summary(mdl1)
+```
+```{r}
+mdl2 = lmer(rqa_DET_HR ~ condition + (1|group) + (1|Study), da)
+
+summary(mdl2)
+```
+ Determinism is higher for turntaking. Interesting
+ 
+```{r}
+mdl1 = lmer(rqa_rr_resp ~ condition + (1|group) + (1|Study), da)
+
+summary(mdl1)
+```
+ 
+
+```{r}
+mdl1 = lmer(rqa_DET_resp ~ condition + (1|group) + (1|Study), da)
+
+summary(mdl1)
+```
+
+```{r}
+mdl1 = lmer(rqa_L_resp ~ condition + (1|group) + (1|Study), da)
+
+summary(mdl1)
+```
+
+
+ 
+ 
+ - N.B: would it make sense to include surrogate pairs? and if so how? what would that tell you?
+
+### Effects of respiration coordination on heart rate coordination
+ - describe how you would test those.
+ - Optional: run the models and report them
+ 
+```{r}
+
+setwd("~/cogsci/EM3/Assignment I/assignment1/CleanData")
+prepro_filelist = list.files(pattern = "G5") # load the preprocessed files
+
+optimal_lag <- tibble(prepro_filelist) %>% 
+  mutate(data =  lapply(prepro_filelist, read.csv, sep = ",")) %>% 
+  unnest()
+
+#function for removing outliers
+RemoveOuts <- function(ts,threshold){
+  ts[ts > (mean(ts,na.rm=T) + (threshold*sd(ts,na.rm=T))) 
+     |  
+       ts < (mean(ts,na.rm=T) - (threshold*sd(ts,na.rm=T)))] = mean(ts,na.rm=T)   
+return(ts)}
+
+
+preproc  = optimal_lag %>% 
+  mutate(prepro_filelist = as.factor(prepro_filelist)) %>% 
+  group_by(prepro_filelist) %>% 
+  group(n= 100, method= 'greedy') %>% 
+  dplyr::summarise(time= mean(time,na.rm=T),
+                   HR1 = mean(HR1,na.rm=T),
+                   HR2 = mean(HR2,na.rm=T),
+                   Resp1 = mean(Resp1,na.rm=T),
+                   Resp2 = mean(Resp2,na.rm=T),
+                   file = prepro_filelist[1])
+
+
+threshold = 2.5
+
+preproc2 <- preproc %>% 
+  mutate(HR1 = RemoveOuts(HR1, threshold),
+         HR2 = RemoveOuts(HR2, threshold),
+         Resp1 = RemoveOuts(Resp1, threshold),
+         Resp2 = RemoveOuts(Resp2, threshold))
+
+res <-  drpdfromts(preproc2$Resp1,preproc2$HR1, ws = 50, datatype = 'continuous', radius = 1.5)
+
+
+timecourse = round( seq(-5000,5000,100)/1000, digit = 1) 
+
+maxlag = res$maxlag/1000 
+profile = res$profile*100 
+Prof=data.frame(profile) 
+
+plot(timecourse, profile,type = "l",
+lwd = 5, xlab = "Lag (seconds)", ylab = "RR")
+abline(v = timecourse[res$maxlag], lty = 2, col = "gray40", lwd = 3)
+
+mtext(paste("Max Lag:", timecourse[res$maxlag], "sec."),
+at = timecourse[res$maxlag] + 1.2, side = 3, col = "red", line = -1.2,
+cex = .8)
+```
+
