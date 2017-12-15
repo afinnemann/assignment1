@@ -1,0 +1,266 @@
+---
+title: "Assignment 5 - Meta-analysis of pitch in schizophrenia"
+author: "Riccardo Fusaroli"
+date: "3/7/2017"
+output: html_document
+---
+  
+
+
+```{r setup, include=FALSE}
+library(pacman)
+p_load(metafor, tidyverse, lmerTest)
+knitr::opts_chunk$set(echo = TRUE)
+
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+da  = read.csv("data.csv", sep = ";")
+```
+
+# Building on the shoulders of giants: meta-analysis
+
+## Questions to be answered
+
+1. What is the current evidence for distinctive patterns of pitch mean and pitch sd in schizophrenia? Report how many papers report quantitative estimates, your method to analyze them, the estimated effect size of the difference (mean effect size and standard error for pitch mean, same for pitch sd) and forest plots representing it. 
+
+```{r}
+#SMD means standardized mean difference: cohen's kappe 
+da2 = escalc("SMD", n1i = SampleSizeContros, n2i =SampleSizeSchizo,
+m1i = PitchMeanControls , m2i =PitchMeanSchizo, sd1i = PitchMeanControlsSD, sd2i = PitchMeanSchizoSD, data =da)
+
+#yi = effect size = cohen's kappa
+#vi = effect variability
+
+
+da2 = da2 %>% 
+  mutate(study = paste("study", 1:14, sep = ""))
+
+mdl = lmer(yi~1+(1|study), weights = 1/vi,da2,control=lmerControl(check.nobs.vs.nlev="ignore", check.nobs.vs.nRE="ignore"))
+
+summary(mdl)
+```
+The average scaled effect size of schizophrenics are -0.18
+
+```{r}
+res <- rma(yi, vi, data = da2, slab=study)
+
+forest(res)
+```
+
+
+2. Do the results match your own analysis from Assignment 3? If you add your results to the meta-analysis, do the estimated effect sizes change? Report the new estimates and the new forest plots.
+
+loading dataset from assignment 3
+```{r}
+
+setwd("~/cogsci/EM3/Assignment I/assignment1")
+
+
+crqa_df <- read.csv("crqa_df.csv")
+
+crqa_df <- crqa_df %>% 
+  mutate(Subject = as.factor(Subject),
+         Study = as.integer(Study))
+
+old_mdl = lmer(mean ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df)
+summary(old_mdl)
+```
+mean sd for control is 138, with an SD of 43.35
+
+
+releveling to find parameters for schizo
+```{r}
+crqa_df = crqa_df %>% 
+  mutate(Diagnosis = relevel(Diagnosis, ref = "Schizophrenia"))
+old_mdl = lmer(mean ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df) #add language
+summary(old_mdl)
+
+```
+SD of schizo is 149.83 with an SD of 43.87
+
+
+Fiding pitch SD measures
+
+```{r}
+crqa_df = crqa_df %>% 
+  mutate(Diagnosis = relevel(Diagnosis, ref = "Schizophrenia"))
+
+old_mdl = lmer(stdDev ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df) #add language
+summary(old_mdl)
+```
+Std for schizo 22,5 with a std of 9.6
+```{r}
+crqa_df = crqa_df %>% 
+  mutate(Diagnosis = relevel(Diagnosis, ref = "Control"))
+
+old_mdl = lmer(stdDev ~ Diagnosis + (Diagnosis + Trial| Subject)+ (1|Study), crqa_df) #add language
+summary(old_mdl)
+```
+SD of control 25.96 with a SD of 10.9
+
+
+Number of participants:
+
+```{r}
+contro = crqa_df %>% 
+  filter(Diagnosis == "Control")
+
+schizo = crqa_df %>% 
+  filter(Diagnosis == "Schizophrenia")
+
+
+length(unique(contro$Subject))
+
+length(unique(schizo$Subject))
+```
+
+```{r}
+my_data = c("Mystudy", 2017,76,75,138,43.4,149.8,43.87,25.96,10.9,22.5,9.6)
+
+da$Article = as.character(da$Article)
+my_da = rbind(da,my_data)
+str(my_da)
+```
+
+```{r}
+
+my_da = my_da %>% 
+  mutate(Article = as.factor(Article),
+         SampleSizeSchizo = as.numeric(SampleSizeSchizo),
+         SampleSizeContros = as.numeric(SampleSizeContros),
+         PitchMeanControls = as.numeric(PitchMeanControls),
+         PitchMeanControlsSD = as.numeric(PitchMeanControlsSD),
+         PitchMeanSchizo = as.numeric(PitchMeanSchizo),
+         PitchMeanSchizoSD = as.numeric(PitchMeanSchizoSD))
+
+```
+
+
+```{r}
+#SMD means standardized mean difference: cohen's kappe ?
+ my_da2 = escalc("SMD", n1i = SampleSizeContros, n2i =SampleSizeSchizo,
+m1i = PitchMeanControls , m2i =PitchMeanSchizo, sd1i = PitchMeanControlsSD, sd2i = PitchMeanSchizoSD, data =my_da)
+
+my_da2 = my_da2 %>% 
+  mutate(study = paste("study", 1:15, sep = ""))
+
+mdl = lmer(yi~1+(1|study), weights = 1/vi,my_da2,control=lmerControl(check.nobs.vs.nlev="ignore", check.nobs.vs.nRE="ignore"))
+
+mdl
+
+```
+
+```{r}
+my_res <- rma(yi, vi, data = my_da2, slab=study)
+
+forest(my_res)
+```
+
+3. Assess the quality of the literature: report and comment on heterogeneity of the studies (tau, I2), on publication bias (funnel plot), and on influential studies.
+
+
+
+influencial outlier
+```{r}
+inf = influence(my_res)
+plot(inf)
+
+```
+
+forest plot without outlier
+
+```{r}
+my_res2 <- rma(yi, vi, data = filter(my_da2, !Year == "2015"), slab=study)
+forest(my_res2)
+
+```
+
+
+
+
+```{r}
+funnel(my_res2, main = "Random-Effects Model",xlab = "Standardized Mean Difference")
+```
+
+
+do summary(m1) to get tau^2 and i^2.
+tau^2 is the variance between studies
+I^2 is the variance not accountable for by variance. i.e. non-overlapping confidence intervals. 
+
+```{r}
+summary(my_res2)
+```
+
+An analysis of heterogenity shows that we can't we have a significant Cochran's Q value, Q(3) = 0.20, p =0.97. Thus, we can't reject the null hypothesis that the success criterion for each study is the same. This indicates that studies have investigted the same phenomenon in the same ways. An I2 value 0 furthermore strengthens the conclusion that the variance is reducible to random sampling variability 
+
+
+We then calculated  the overall variance tau2 and assessed whether it could be explained by within-study variance (e.g., due to measurement noise or heterogeneity in the ASD samples included in the studies).
+
+
+
+using Cochran’s Q (Cochran, 1954) and I2 statistics (Higgins, Thompson, Deeks, & Altman, 2003) 2) of 0.18 (95% CIs: 0.04 0.61). Much of the variance (I2: 60.18%, 95% CIs: 26.83 83.38) could not be reduced to random sample variability between studies (Q-stats = 39.94, p = 0.0008). However, neither task (estimate: 0.2, 95% CIs -0.15 0.55, p=0.27) nor language (estimate: -0.03, 95% CIs -0.12 0.05, p=0.42) could significantly explain the variance
+
+
+
+#Repeating analysis for SD
+```{r}
+my_da = my_da %>% 
+  mutate(PitchSDControls = as.numeric(PitchSDControls),
+         PitchSDControlsSD = as.numeric(PitchSDControlsSD),
+         PitchSDSchizo = as.numeric(PitchSDSchizo),
+         PitchSDSchizoSD = as.numeric(PitchSDSchizoSD))
+
+my_da2 = escalc("SMD", n1i = SampleSizeContros, n2i =SampleSizeSchizo,
+m1i = PitchSDControls , m2i =PitchSDSchizo, sd1i = PitchSDControlsSD, sd2i = PitchSDSchizoSD, data =my_da)
+
+my_da2 = my_da2 %>% 
+  mutate(study = paste("study", 1:15, sep = ""))
+
+mdl = lmer(yi~1+(1|study), weights = 1/vi,my_da2,control=lmerControl(check.nobs.vs.nlev="ignore", check.nobs.vs.nRE="ignore"))
+
+summary(mdl)
+
+```
+
+
+
+```{r}
+my_res <- rma(yi, vi, data = my_da2, slab=study)
+
+forest(my_res)
+```
+
+3. Assess the quality of the literature: report and comment on heterogeneity of the studies (tau, I2), on publication bias (funnel plot), and on influential studies.
+
+
+
+influencial outlier
+```{r}
+inf = influence(my_res)
+plot(inf)
+
+```
+
+forest plot without outlier
+
+```{r}
+my_res2 <- rma(yi, vi, data = filter(my_da2, !Article == "Cohen et al. 2014"), slab=study)
+forest(my_res2)
+
+```
+
+
+
+
+```{r}
+funnel(my_res2, main = "Random-Effects Model",xlab = "Standardized Mean Difference")
+```
+Higher SD are generally to the right, whereas study with better standard errors generally show less effect. This could indicate a populication bias. 
+
+do summary(m1) to get tau^2 and i^2.
+tau^2 is the variance between studies
+I^2 is the variance not accountable for by variance. i.e. non-overlapping confidence intervals. 
+
+```{r}
+summary(my_res2)
+```
+
